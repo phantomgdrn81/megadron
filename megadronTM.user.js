@@ -1,13 +1,18 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.2.2
+// @version      1.2.3
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
 // @match        https://megadron.pl/pl/products/*
 // @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        unsafeWindow
 // @connect      client6220.idosell.com
+// @connect      edge.salescenter.allegro.com
+// @run-at       document-start
 // @updateURL    https://raw.githubusercontent.com/phantomgdrn81/megadron/refs/heads/main/megadronTM.user.js
 // @downloadURL  https://raw.githubusercontent.com/phantomgdrn81/megadron/refs/heads/main/megadronTM.user.js
 // ==/UserScript==
@@ -176,7 +181,7 @@
         }
 
         const observerM1 = new MutationObserver(processLinksM1);
-        observerM1.observe(document.body, { childList: true, subtree: true });
+        observerM1.observe(document.documentElement, { childList: true, subtree: true });
         processLinksM1();
     }
 
@@ -291,7 +296,7 @@
                     }
                 }
             });
-            obs.observe(document.body, { childList: true, subtree: true });
+            obs.observe(document.documentElement, { childList: true, subtree: true });
         }
 
         function startHistory() {
@@ -362,7 +367,7 @@
         }
 
         initTooltip();
-        new MutationObserver(initTooltip).observe(document.body, { childList: true, subtree: true });
+        new MutationObserver(initTooltip).observe(document.documentElement, { childList: true, subtree: true });
     }
 
 
@@ -417,7 +422,7 @@
         }
 
         addCourierLabels();
-        new MutationObserver(addCourierLabels).observe(document.body, { childList: true, subtree: true });
+        new MutationObserver(addCourierLabels).observe(document.documentElement, { childList: true, subtree: true });
     }
 
 
@@ -464,7 +469,7 @@
 
         addStylesSN();
         convertLinks();
-        new MutationObserver(convertLinks).observe(document.body, { childList: true, subtree: true });
+        new MutationObserver(convertLinks).observe(document.documentElement, { childList: true, subtree: true });
     }
 
 
@@ -606,7 +611,7 @@
             clearTimeout(debounceOther);
             debounceOther = setTimeout(runOtherOrders, 600);
         });
-        observerOther.observe(document.body, { childList: true, subtree: true });
+        observerOther.observe(document.documentElement, { childList: true, subtree: true });
         setTimeout(() => { observerOther.disconnect(); runOtherOrders(); }, 8000);
 
         if (document.readyState === 'loading') {
@@ -658,7 +663,7 @@
             clearTimeout(debounceDup);
             debounceDup = setTimeout(runDuplicates, 600);
         });
-        observerDup.observe(document.body, { childList: true, subtree: true });
+        observerDup.observe(document.documentElement, { childList: true, subtree: true });
         setTimeout(() => { observerDup.disconnect(); runDuplicates(); }, 8000);
 
         if (document.readyState === 'loading') {
@@ -699,7 +704,7 @@
             clearTimeout(debounceApi);
             debounceApi = setTimeout(runApiOrders, 600);
         });
-        observerApi.observe(document.body, { childList: true, subtree: true });
+        observerApi.observe(document.documentElement, { childList: true, subtree: true });
         setTimeout(() => { observerApi.disconnect(); runApiOrders(); }, 8000);
 
         if (document.readyState === 'loading') {
@@ -708,7 +713,6 @@
             runApiOrders();
         }
     }
-
 
     // ════════════════════════════════════════════════════════════════════════
     // PRZEKIEROWANIE DO IDOSELL NA MEGADRON.PL
@@ -727,7 +731,7 @@
                     const el = document.querySelector(selector);
                     if (el) { observer.disconnect(); callback(el); }
                 });
-                observer.observe(document.body, { childList: true, subtree: true });
+                observer.observe(document.documentElement, { childList: true, subtree: true });
                 setTimeout(() => observer.disconnect(), timeout);
             }
 
@@ -773,7 +777,7 @@
                     const el = document.querySelector(selector);
                     if (el) { observer.disconnect(); callback(el); }
                 });
-                observer.observe(document.body, { childList: true, subtree: true });
+                observer.observe(document.documentElement, { childList: true, subtree: true });
                 setTimeout(() => observer.disconnect(), timeout);
             }
 
@@ -856,7 +860,7 @@
                     const el = document.querySelector(selector);
                     if (el) { observer.disconnect(); callback(el); }
                 });
-                observer.observe(document.body, { childList: true, subtree: true });
+                observer.observe(document.documentElement, { childList: true, subtree: true });
                 setTimeout(() => observer.disconnect(), timeout);
             }
 
@@ -1028,7 +1032,7 @@
         wasVisible = nowVisible;
     });
 
-    visibilityObserver.observe(document.body, {
+    visibilityObserver.observe(document.documentElement, {
         attributes: true,
         attributeFilter: ['style'],
         subtree: true
@@ -1054,6 +1058,213 @@
         }
     }, true);
         })();
+    }
+
+
+
+    // ════════════════════════════════════════════════════════════════════════
+    // STATUSY ALLEGRO NA LIŚCIE ZAMÓWIEŃ
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (url.includes('/panel/orders-list.php')) {
+
+        // SELLER ID - ID Z NAGŁÓWKA ALLEGRO
+        const AZ_SELLER_ID = '38153188';
+
+        const AZ_CACHE_TTL_MS = 15 * 60 * 1000;
+        const AZ_MAX_CONCURRENT = 5;
+        const AZ_ROW_WAIT_TIMEOUT_MS = 60000;
+
+        const AZ_STATUS_INFO = {
+            RETURNED:  { icon: '🔁', text: 'ZWROT', wrap: true },
+            CANCELLED: { icon: '❌', text: 'ANULOWANE', wrap: true },
+        };
+        const AZ_DEFAULT_INFO = { icon: '✅', text: '', wrap: false };
+        const AZ_HIGHLIGHT_COLOR = '#ffe3e3';
+
+        function azGmFetch(fetchUrl) {
+            return new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: fetchUrl,
+                    headers: {
+                        'Accept': 'application/vnd.allegro.public.v1+json',
+                        'X-Representative-Of': AZ_SELLER_ID,
+                    },
+                    onload: resolve,
+                    onerror: reject,
+                    ontimeout: reject,
+                    timeout: 15000,
+                });
+            });
+        }
+
+        function azCreateQueue(maxConcurrent) {
+            let active = 0;
+            const queue = [];
+            function next() {
+                if (active >= maxConcurrent || queue.length === 0) return;
+                active++;
+                const { fn, resolve, reject } = queue.shift();
+                fn().then(resolve, reject).finally(() => { active--; next(); });
+            }
+            return (fn) => new Promise((resolve, reject) => { queue.push({ fn, resolve, reject }); next(); });
+        }
+        const azEnqueue = azCreateQueue(AZ_MAX_CONCURRENT);
+
+        function azGetCached(orderNumber) {
+            const raw = GM_getValue('azOrder2_' + orderNumber, null);
+            if (!raw) return null;
+            try {
+                const data = JSON.parse(raw);
+                if (Date.now() - data.ts > AZ_CACHE_TTL_MS) return null;
+                return data.status;
+            } catch { return null; }
+        }
+        function azSetCached(orderNumber, status) {
+            GM_setValue('azOrder2_' + orderNumber, JSON.stringify({ status, ts: Date.now() }));
+        }
+
+
+        function azExtractAllegroOrders(data) {
+            const records = data?.records || [];
+            const results = [];
+            for (const record of records) {
+                const orderNumber = record?.id?.order_number;
+                const uuid = record?.order_source?.details?.orderExternalId;
+                const isAllegro = record?.order_source?.auction === 'allegro';
+                if (orderNumber && uuid && isAllegro) {
+                    results.push({ orderNumber: String(orderNumber), uuid });
+                }
+            }
+            return results;
+        }
+
+        // STATUS ALLEGRO
+        async function azFetchAllegroStatus(uuid) {
+            const res = await azGmFetch(`https://edge.salescenter.allegro.com/seller/orders/${uuid}`);
+            if (res.status !== 200) return null;
+            const data = JSON.parse(res.responseText);
+
+            if (data.status !== 'CANCELLED' && data.status !== 'RETURNED'
+                && data.itemReturnStatus && data.itemReturnStatus !== 'NONE') return 'RETURNED';
+            return data.status;
+        }
+
+        // DOM
+        function azFindRowCellByOrderNumber(orderNumber) {
+            const link = document.querySelector(`a[href*="orderd.php?idt=${orderNumber}"]`);
+            if (link) return link;
+            for (const el of document.querySelectorAll('td a, td')) {
+                if (el.children.length === 0 && el.textContent.trim() === orderNumber) return el;
+            }
+            return null;
+        }
+
+        function azInjectHighlightStyle() {
+            const style = document.createElement('style');
+            style.textContent = `tr.az-problem td { background-color: ${AZ_HIGHLIGHT_COLOR} !important; }`;
+            document.head.appendChild(style);
+        }
+
+        function azRenderStatus(anchorEl, status) {
+            if (anchorEl.dataset.allegroStatus) return;
+            anchorEl.dataset.allegroStatus = '1';
+
+            const info = AZ_STATUS_INFO[status] || AZ_DEFAULT_INFO;
+
+            const wrapper = document.createElement('span');
+            wrapper.style.display = 'block';
+            wrapper.style.marginTop = '2px';
+            wrapper.style.whiteSpace = 'nowrap';
+            wrapper.textContent = info.wrap ? `${info.icon} ${info.text} ${info.icon}` : info.icon;
+            anchorEl.insertAdjacentElement('afterend', wrapper);
+
+            if (info.wrap) {
+                const row = anchorEl.closest('tr');
+                if (row) row.classList.add('az-problem');
+            }
+        }
+
+        function azProcessListData(listData) {
+            const orders = azExtractAllegroOrders(listData);
+            if (orders.length === 0) return;
+
+            const pending = new Map(orders.map(o => [o.orderNumber, o.uuid]));
+
+            function tryRenderAll() {
+                for (const [orderNumber, uuid] of pending.entries()) {
+                    const cell = azFindRowCellByOrderNumber(orderNumber);
+                    if (!cell) continue;
+                    pending.delete(orderNumber);
+
+                    const cachedStatus = azGetCached(orderNumber);
+                    if (cachedStatus !== null) {
+                        azRenderStatus(cell, cachedStatus);
+                        continue;
+                    }
+
+                    azEnqueue(() => azFetchAllegroStatus(uuid))
+                        .then((status) => {
+                            if (status) azSetCached(orderNumber, status);
+                            azRenderStatus(cell, status);
+                        })
+                        .catch((e) => console.error('[allegro-zwroty] blad pobierania statusu dla', orderNumber, e));
+                }
+            }
+
+            tryRenderAll();
+            if (pending.size === 0) return;
+
+            const observer = new MutationObserver(() => {
+                tryRenderAll();
+                if (pending.size === 0) { observer.disconnect(); clearInterval(poll); }
+            });
+            observer.observe(document.documentElement, { childList: true, subtree: true });
+
+            const poll = setInterval(() => {
+                tryRenderAll();
+                if (pending.size === 0) { observer.disconnect(); clearInterval(poll); }
+            }, 1000);
+
+            setTimeout(() => { observer.disconnect(); clearInterval(poll); }, AZ_ROW_WAIT_TIMEOUT_MS);
+        }
+
+        function azInstallHooks() {
+            const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+
+            const X = win.XMLHttpRequest;
+            const origOpen = X.prototype.open;
+            const origSend = X.prototype.send;
+            X.prototype.open = function (method, openUrl, ...rest) {
+                this.__azUrl = openUrl;
+                return origOpen.call(this, method, openUrl, ...rest);
+            };
+            X.prototype.send = function (...args) {
+                if (this.__azUrl && String(this.__azUrl).includes('orders-list-data.php')) {
+                    this.addEventListener('load', function () {
+                        try { azProcessListData(JSON.parse(this.responseText)); }
+                        catch (e) { console.error('[allegro-zwroty] blad parsowania odpowiedzi XHR', e); }
+                    });
+                }
+                return origSend.apply(this, args);
+            };
+
+            const origFetch = win.fetch;
+            if (origFetch) {
+                win.fetch = function (input, init) {
+                    const fetchUrl = typeof input === 'string' ? input : input && input.url;
+                    const p = origFetch.apply(this, arguments);
+                    if (fetchUrl && fetchUrl.includes('orders-list-data.php')) {
+                        p.then((res) => res.clone().json()).then(azProcessListData).catch(() => {});
+                    }
+                    return p;
+                };
+            }
+        }
+
+        azInstallHooks();
+        azInjectHighlightStyle();
     }
 
 })();
