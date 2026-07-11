@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.3
+// @version      1.2.4
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -24,8 +24,88 @@
 
     const url = window.location.href;
 
+
     // ════════════════════════════════════════════════════════════════════════
-    // GUZICZKI GABARYTÓW INPOST
+    // PRZEKIEROWANIE /panel/ -> /panel/app/
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (window.self === window.top) {
+        const AP_REQUIRED_PREFIX = 'https://client6220.idosell.com/panel/app/';
+        const AP_BASE_PREFIX = 'https://client6220.idosell.com/panel/';
+
+        if (url.startsWith(AP_BASE_PREFIX) && !url.startsWith(AP_REQUIRED_PREFIX)) {
+            const apFixedUrl = AP_REQUIRED_PREFIX + url.slice(AP_BASE_PREFIX.length);
+            window.location.replace(apFixedUrl);
+            return;
+        }
+    }
+
+
+    // ════════════════════════════════════════════════════════════════════════
+    // WERYFIKACJA ZAM. SORTOWANIE WEDŁUG LOKALIZACJI
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (url.includes('/panel/order-verification.php')) {
+
+        window.addEventListener("load", () => {
+            addButtonSortujLokalizacje();
+        });
+
+        function addButtonSortujLokalizacje() {
+            if (document.getElementById('sortujLokalizacjeBtn')) return;
+
+            var descTd = [...document.querySelectorAll('td.tableRowDescription')].find(function (td) {
+                return /Krok 1/i.test(td.textContent);
+            });
+            if (!descTd) return;
+
+            var table = descTd.closest('table');
+            var tbody = table.querySelector('.yui-dt-data');
+            if (!tbody) return;
+
+            var btn = document.createElement('input');
+            btn.type = 'button';
+            btn.id = 'sortujLokalizacjeBtn';
+            btn.value = 'Sortuj wg lokalizacji';
+            btn.className = 'btn btn-xs btn-default';
+            btn.style.cssText = 'float:right; font-size:11px; padding:2px 8px;';
+            btn.addEventListener('click', function () {
+                sortujWierszeWgLokalizacji(tbody);
+            });
+
+            descTd.style.position = 'relative';
+            descTd.appendChild(btn);
+        }
+
+        function wyciagnijLokalizacje(row) {
+            var nameCell = row.querySelector('.yui-dt-col-name');
+            if (!nameCell) return null;
+            var text = nameCell.textContent;
+            var match = text.match(/Lokalizacje:\s*([^📦]+?)\s*📦/);
+            if (!match) return null;
+            var loc = match[1].trim();
+            if (!loc || /brak lokalizacji/i.test(loc)) return null;
+            return loc;
+        }
+
+        function sortujWierszeWgLokalizacji(tbody) {
+            var rows = [...tbody.querySelectorAll('tr')];
+            rows.sort(function (a, b) {
+                var locA = wyciagnijLokalizacje(a);
+                var locB = wyciagnijLokalizacje(b);
+                if (locA === null && locB === null) return 0;
+                if (locA === null) return 1;
+                if (locB === null) return -1;
+                return locA.localeCompare(locB, 'pl', { numeric: true });
+            });
+            rows.forEach(function (row) {
+                tbody.appendChild(row);
+            });
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // GUZICZKI GABARYTÓW INPOST //offDF
     // ════════════════════════════════════════════════════════════════════════
 
     if (url.includes('/panel/order-verification.php')) {
@@ -60,6 +140,93 @@
                     IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'courierId=' + jsonObject.deliverer_id + '&action=generate&orders[]=' + jsonObject.order_id);
                 }
             }
+            var badDivs = $("#msg_line_msg");
+            badDivs.remove();
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // GUZICZKI GABARYTÓW ALLEGRO
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (url.includes('/panel/order-verification.php')) {
+
+        window.addEventListener("load", () => {
+            addButtonsGabarytAllegro();
+        });
+
+        function addButtonsGabarytAllegro() {
+            var GB_COURIER_TITLES = [
+                'Allegro Automat DPD Pickup',
+                'Allegro Odbiór w Punkcie Orlen Paczka',
+                'Allegro Automat Orlen Paczka',
+                'Allegro Automat DHL BOX 24/7 (AD)',
+            ];
+            var GB_COURIER_PREFIXES = [
+                'Allegro One Box (',
+            ];
+
+            var deliveryEl = document.getElementById("deliverer-number-count_" + IAI._orderNumber);
+            if (!deliveryEl) return;
+
+            var scriptDelivery = deliveryEl.getAttribute("onclick");
+            scriptDelivery = scriptDelivery.replace('show_packages_edit_toplayer(event,', '');
+            scriptDelivery = scriptDelivery.replace(/\)\s*$/, '');
+            var jsonObject = JSON.parse(scriptDelivery);
+
+            var matchedTitle = GB_COURIER_TITLES.find(function (title) {
+                return !!document.querySelector('[title="' + title + '"]');
+            }) || GB_COURIER_PREFIXES.find(function (prefix) {
+                return !!document.querySelector('[title^="' + prefix + '"]');
+            });
+            if (!matchedTitle) return;
+
+            if (jsonObject.delivery_packages.packs[0].package_number) return;
+
+            if (document.getElementById('wyborGabarytu')) return;
+
+            var mydiv = document.querySelector("#tr_0 > td:nth-child(5)");
+            if (!mydiv) return;
+
+            var wrap = document.createElement('div');
+            wrap.id = 'wyborGabarytu';
+            wrap.innerHTML = '<br/>';
+
+            var gauges = [
+                { label: 'Gabaryt A', value: 'S', cls: 'btn btn-sm btn-success formbutton' },
+                { label: 'Gabaryt B', value: 'M', cls: 'btn btn-sm btn-warning formbutton' },
+                { label: 'Gabaryt C', value: 'L', cls: 'btn btn-sm btn-danger formbutton' },
+            ];
+
+            gauges.forEach(function (g) {
+                var btn = document.createElement('input');
+                btn.type = 'button';
+                btn.value = g.label;
+                btn.className = g.cls;
+                btn.style.cssText = 'margin-top:20px; height:50px; font-size:15px; border-radius: 3px';
+                btn.addEventListener('click', function () {
+                    IAI.ajax.post(
+                        '/panel/ajax/packages-gateway.php', '',
+                        'defaultParcelGauge=' + g.value +
+                        '&courierId=' + jsonObject.deliverer_id +
+                        '&action=generate&orders[]=' + jsonObject.order_id
+                    );
+
+                    wrap.innerHTML = '<br/><b>Przypisano gabaryt ' + g.label.slice(-1) + '!</b>';
+
+                    var fgCode = document.querySelector('#fg_code');
+                    if (fgCode) fgCode.focus();
+
+                    setTimeout(function () {
+                        var link = document.querySelector('.generateNumber22');
+                        if (link) link.click();
+                    }, 1200);
+                });
+                wrap.appendChild(btn);
+            });
+
+            mydiv.appendChild(wrap);
+
             var badDivs = $("#msg_line_msg");
             badDivs.remove();
         }
