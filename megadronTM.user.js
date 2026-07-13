@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.4
+// @version      1.2.4.1
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -161,6 +161,7 @@
                 'Allegro Odbiór w Punkcie Orlen Paczka',
                 'Allegro Automat Orlen Paczka',
                 'Allegro Automat DHL BOX 24/7 (AD)',
+                'Allegro Odbiór w Punkcie DHL (AD)',
             ];
             var GB_COURIER_PREFIXES = [
                 'Allegro One Box (',
