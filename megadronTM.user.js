@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.4.1
+// @version      1.2.4.2
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -32,8 +32,11 @@
     if (window.self === window.top) {
         const AP_REQUIRED_PREFIX = 'https://client6220.idosell.com/panel/app/';
         const AP_BASE_PREFIX = 'https://client6220.idosell.com/panel/';
+        const AP_EXCLUDED_PATHS = ['/panel/orders-connect'];
 
-        if (url.startsWith(AP_BASE_PREFIX) && !url.startsWith(AP_REQUIRED_PREFIX)) {
+        const isExcluded = AP_EXCLUDED_PATHS.some(path => url.includes(path));
+
+        if (!isExcluded url.startsWith(AP_BASE_PREFIX) && !url.startsWith(AP_REQUIRED_PREFIX)) {
             const apFixedUrl = AP_REQUIRED_PREFIX + url.slice(AP_BASE_PREFIX.length);
             window.location.replace(apFixedUrl);
             return;
