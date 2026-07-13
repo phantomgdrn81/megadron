@@ -36,7 +36,7 @@
 
         const isExcluded = AP_EXCLUDED_PATHS.some(path => url.includes(path));
 
-        if (!isExcluded url.startsWith(AP_BASE_PREFIX) && !url.startsWith(AP_REQUIRED_PREFIX)) {
+        if (!isExcluded && url.startsWith(AP_BASE_PREFIX) && !url.startsWith(AP_REQUIRED_PREFIX)) {
             const apFixedUrl = AP_REQUIRED_PREFIX + url.slice(AP_BASE_PREFIX.length);
             window.location.replace(apFixedUrl);
             return;
