@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.4.2
+// @version      1.2.5
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -40,6 +40,59 @@
             const apFixedUrl = AP_REQUIRED_PREFIX + url.slice(AP_BASE_PREFIX.length);
             window.location.replace(apFixedUrl);
             return;
+        }
+    }
+
+
+    // ════════════════════════════════════════════════════════════════════════
+    // WSPÓLNY MUTATION DISPATCHER
+    // ════════════════════════════════════════════════════════════════════════
+
+    const tmDispatcher = (function () {
+        let observer = null;
+        const callbacks = [];
+        let scheduled = false;
+
+        function runAll() {
+            scheduled = false;
+            callbacks.forEach(function (fn) {
+                try { fn(); } catch (e) { console.error('[TM dispatcher]', e); }
+            });
+        }
+
+        function scheduleRun() {
+            if (scheduled) return;
+            scheduled = true;
+            setTimeout(runAll, 80);
+        }
+
+        function register(fn) {
+            callbacks.push(fn);
+            if (!observer) {
+                observer = new MutationObserver(scheduleRun);
+                observer.observe(document.documentElement, { childList: true, subtree: true });
+            }
+            fn();
+        }
+
+        return { register: register };
+    })();
+
+
+    // ════════════════════════════════════════════════════════════════════════
+    // WSPÓLNY PARSER DANYCH DOSTAWY (używany przez oba warianty gabarytów)
+    // ════════════════════════════════════════════════════════════════════════
+
+    function getOrderDeliveryData() {
+        const el = document.getElementById("deliverer-number-count_" + IAI._orderNumber);
+        if (!el) return null;
+        let raw = el.getAttribute("onclick");
+        if (!raw) return null;
+        raw = raw.replace('show_packages_edit_toplayer(event,', '').replace(/\)\s*$/, '');
+        try {
+            return JSON.parse(raw);
+        } catch (e) {
+            return null;
         }
     }
 
@@ -118,11 +171,8 @@
         });
 
         function addButtonsGabaryt() {
-            var scriptDelivery = document.getElementById("deliverer-number-count_" + IAI._orderNumber);
-            scriptDelivery = scriptDelivery.getAttribute("onclick");
-            scriptDelivery = scriptDelivery.replace('show_packages_edit_toplayer(event,', '');
-            scriptDelivery = scriptDelivery.replace(')', '');
-            var jsonObject = JSON.parse(scriptDelivery);
+            var jsonObject = getOrderDeliveryData();
+            if (!jsonObject) return;
             var packageId = jsonObject.delivery_packages.packs[0].id;
 
             if (!jsonObject.delivery_packages.packs[0].package_number) {
@@ -170,13 +220,8 @@
                 'Allegro One Box (',
             ];
 
-            var deliveryEl = document.getElementById("deliverer-number-count_" + IAI._orderNumber);
-            if (!deliveryEl) return;
-
-            var scriptDelivery = deliveryEl.getAttribute("onclick");
-            scriptDelivery = scriptDelivery.replace('show_packages_edit_toplayer(event,', '');
-            scriptDelivery = scriptDelivery.replace(/\)\s*$/, '');
-            var jsonObject = JSON.parse(scriptDelivery);
+            var jsonObject = getOrderDeliveryData();
+            if (!jsonObject) return;
 
             var matchedTitle = GB_COURIER_TITLES.find(function (title) {
                 return !!document.querySelector('[title="' + title + '"]');
@@ -267,7 +312,8 @@
                         });
                         if (!row) { callback(null); return; }
                         const cells = row.querySelectorAll('td');
-                        callback(cells[1] ? cells[1].textContent.trim() : null);
+                        const value = cells[1] ? cells[1].textContent.trim() : null;
+                        callback(value);
                     } catch (e) {
                         callback(null);
                     }
@@ -278,8 +324,6 @@
 
         function makeBadgeM1(m1) {
             const qty = parseInt(m1, 10);
-            if (m1 === null) {
-            }
             let displayM1 = m1 !== null ? m1 : '-';
             if (m1 === 'jest') {
                 displayM1 = "<i> elektronicznie </i>";
@@ -351,9 +395,7 @@
             });
         }
 
-        const observerM1 = new MutationObserver(processLinksM1);
-        observerM1.observe(document.documentElement, { childList: true, subtree: true });
-        processLinksM1();
+        tmDispatcher.register(processLinksM1);
     }
 
 
@@ -361,7 +403,7 @@
     // UKRYJ WIERSZE W HISTORII ZAMÓWIENIA
     // ════════════════════════════════════════════════════════════════════════
 
-    if (url.includes('/panel/orderd.php') || url.includes('/panel/app/orderd.php')) {
+    if (url.includes('/panel/app/orderd.php')) {
 
         const NEEDLE_PHRASES = [
             'Nie udało się wykonać automatycznej zmiany statusu zamówienia, gdy wszystkie towary znalazły się na magazynach własnych. Niewystarczająca ilość towaru na stanie dyspozycyjnym'
@@ -439,42 +481,13 @@
             updateSummaryHistory();
         }
 
-        function scheduleRescanSequence() {
-            [0, 200, 600, 1200, 2000].forEach(d => setTimeout(() => processRowsHistory(document), d));
-        }
-
-        function hookHistoryClick() {
-            document.addEventListener('click', (e) => {
-                const a = e.target && e.target.closest ? e.target.closest('a') : null;
-                if (!a) return;
-                const onclick = a.getAttribute('onclick') || '';
-                const txt = (a.textContent || '').trim();
-                if (txt === 'Historia zamówienia' || onclick.includes('IAI._orderd.orderHistory(')) {
-                    scheduleRescanSequence();
-                }
-            }, true);
-        }
-
-        function observeDomHistory() {
-            const obs = new MutationObserver(mutations => {
-                for (const m of mutations) {
-                    for (const node of m.addedNodes) {
-                        if (!(node instanceof HTMLElement)) continue;
-                        if (node.matches?.('div.hd#orderHistoryDiv_h') || node.querySelector?.('div.hd#orderHistoryDiv_h')) {
-                            ensureUI();
-                        }
-                        processRowsHistory(node);
-                    }
-                }
-            });
-            obs.observe(document.documentElement, { childList: true, subtree: true });
+        function tmHistoryTick() {
+            ensureUI();
+            processRowsHistory(document);
         }
 
         function startHistory() {
-            ensureUI();
-            processRowsHistory(document);
-            hookHistoryClick();
-            observeDomHistory();
+            tmDispatcher.register(tmHistoryTick);
         }
 
         if (document.readyState === 'loading') {
@@ -537,8 +550,7 @@
             });
         }
 
-        initTooltip();
-        new MutationObserver(initTooltip).observe(document.documentElement, { childList: true, subtree: true });
+        tmDispatcher.register(initTooltip);
     }
 
 
@@ -592,8 +604,7 @@
             });
         }
 
-        addCourierLabels();
-        new MutationObserver(addCourierLabels).observe(document.documentElement, { childList: true, subtree: true });
+        tmDispatcher.register(addCourierLabels);
     }
 
 
@@ -639,8 +650,7 @@
         }
 
         addStylesSN();
-        convertLinks();
-        new MutationObserver(convertLinks).observe(document.documentElement, { childList: true, subtree: true });
+        tmDispatcher.register(convertLinks);
     }
 
 
@@ -648,7 +658,7 @@
     // LINKI Z ZAM DO ALLEGRO
     // ════════════════════════════════════════════════════════════════════════
 
-    if (url.includes('/panel/orderd.php') || url.includes('/panel/app/orderd.php')) {
+    if (url.includes('/panel/app/orderd.php')) {
 
         var allegroUrl = "https://salescenter.allegro.com/orders/";
         var empikUrl = "https://marketplace.empik.com/mmp/shop/order/";
@@ -730,7 +740,7 @@
     // INNE ZAMÓWIENIA KLIENTA W REALIZACJI
     // ════════════════════════════════════════════════════════════════════════
 
-    if (url.includes('/panel/orderd.php') || url.includes('/panel/app/orderd.php')) {
+    if (url.includes('/panel/app/orderd.php')) {
 
         function runOtherOrders() {
             const old = document.getElementById('tm-order-box');
@@ -777,19 +787,7 @@
             document.body.appendChild(box);
         }
 
-        let debounceOther;
-        const observerOther = new MutationObserver(() => {
-            clearTimeout(debounceOther);
-            debounceOther = setTimeout(runOtherOrders, 600);
-        });
-        observerOther.observe(document.documentElement, { childList: true, subtree: true });
-        setTimeout(() => { observerOther.disconnect(); runOtherOrders(); }, 8000);
-
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', runOtherOrders);
-        } else {
-            runOtherOrders();
-        }
+        tmDispatcher.register(runOtherOrders);
     }
 
 
@@ -829,19 +827,7 @@
             });
         }
 
-        let debounceDup;
-        const observerDup = new MutationObserver(() => {
-            clearTimeout(debounceDup);
-            debounceDup = setTimeout(runDuplicates, 600);
-        });
-        observerDup.observe(document.documentElement, { childList: true, subtree: true });
-        setTimeout(() => { observerDup.disconnect(); runDuplicates(); }, 8000);
-
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', runDuplicates);
-        } else {
-            runDuplicates();
-        }
+        tmDispatcher.register(runDuplicates);
     }
 
 
@@ -870,19 +856,7 @@
             });
         }
 
-        let debounceApi;
-        const observerApi = new MutationObserver(() => {
-            clearTimeout(debounceApi);
-            debounceApi = setTimeout(runApiOrders, 600);
-        });
-        observerApi.observe(document.documentElement, { childList: true, subtree: true });
-        setTimeout(() => { observerApi.disconnect(); runApiOrders(); }, 8000);
-
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', runApiOrders);
-        } else {
-            runApiOrders();
-        }
+        tmDispatcher.register(runApiOrders);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -1242,8 +1216,7 @@
         // SELLER ID - ID Z NAGŁÓWKA ALLEGRO
         const AZ_SELLER_ID = '38153188';
 
-        const AZ_CACHE_TTL_MS = 15 * 60 * 1000;
-        const AZ_MAX_CONCURRENT = 5;
+        const AZ_MAX_CONCURRENT = 8;
         const AZ_ROW_WAIT_TIMEOUT_MS = 60000;
 
         const AZ_STATUS_INFO = {
@@ -1282,20 +1255,6 @@
             return (fn) => new Promise((resolve, reject) => { queue.push({ fn, resolve, reject }); next(); });
         }
         const azEnqueue = azCreateQueue(AZ_MAX_CONCURRENT);
-
-        function azGetCached(orderNumber) {
-            const raw = GM_getValue('azOrder2_' + orderNumber, null);
-            if (!raw) return null;
-            try {
-                const data = JSON.parse(raw);
-                if (Date.now() - data.ts > AZ_CACHE_TTL_MS) return null;
-                return data.status;
-            } catch { return null; }
-        }
-        function azSetCached(orderNumber, status) {
-            GM_setValue('azOrder2_' + orderNumber, JSON.stringify({ status, ts: Date.now() }));
-        }
-
 
         function azExtractAllegroOrders(data) {
             const records = data?.records || [];
@@ -1361,42 +1320,39 @@
             const orders = azExtractAllegroOrders(listData);
             if (orders.length === 0) return;
 
-            const pending = new Map(orders.map(o => [o.orderNumber, o.uuid]));
+            const statusByOrder = new Map();
+            const pendingRender = new Set(orders.map(o => o.orderNumber));
 
             function tryRenderAll() {
-                for (const [orderNumber, uuid] of pending.entries()) {
+                for (const orderNumber of pendingRender) {
+                    if (!statusByOrder.has(orderNumber)) continue;
                     const cell = azFindRowCellByOrderNumber(orderNumber);
                     if (!cell) continue;
-                    pending.delete(orderNumber);
-
-                    const cachedStatus = azGetCached(orderNumber);
-                    if (cachedStatus !== null) {
-                        azRenderStatus(cell, cachedStatus);
-                        continue;
-                    }
-
-                    azEnqueue(() => azFetchAllegroStatus(uuid))
-                        .then((status) => {
-                            if (status) azSetCached(orderNumber, status);
-                            azRenderStatus(cell, status);
-                        })
-                        .catch((e) => console.error('[allegro-zwroty] blad pobierania statusu dla', orderNumber, e));
+                    azRenderStatus(cell, statusByOrder.get(orderNumber));
+                    pendingRender.delete(orderNumber);
+                }
+                if (pendingRender.size === 0) {
+                    observer.disconnect();
+                    clearInterval(poll);
                 }
             }
 
-            tryRenderAll();
-            if (pending.size === 0) return;
-
-            const observer = new MutationObserver(() => {
-                tryRenderAll();
-                if (pending.size === 0) { observer.disconnect(); clearInterval(poll); }
+            orders.forEach(({ orderNumber, uuid }) => {
+                azEnqueue(() => azFetchAllegroStatus(uuid))
+                    .then((status) => {
+                        statusByOrder.set(orderNumber, status);
+                        tryRenderAll();
+                    })
+                    .catch((e) => console.error('[allegro-zwroty] blad pobierania statusu dla', orderNumber, e));
             });
+
+            tryRenderAll();
+            if (pendingRender.size === 0) return;
+
+            const observer = new MutationObserver(tryRenderAll);
             observer.observe(document.documentElement, { childList: true, subtree: true });
 
-            const poll = setInterval(() => {
-                tryRenderAll();
-                if (pending.size === 0) { observer.disconnect(); clearInterval(poll); }
-            }, 1000);
+            const poll = setInterval(tryRenderAll, 1000);
 
             setTimeout(() => { observer.disconnect(); clearInterval(poll); }, AZ_ROW_WAIT_TIMEOUT_MS);
         }
