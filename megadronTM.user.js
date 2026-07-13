@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.5
+// @version      1.2.5.1
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -403,7 +403,7 @@
     // UKRYJ WIERSZE W HISTORII ZAMÓWIENIA
     // ════════════════════════════════════════════════════════════════════════
 
-    if (url.includes('/panel/app/orderd.php')) {
+    if (url.includes('/panel/orderd.php') || url.includes('/panel/app/orderd.php')) {
 
         const NEEDLE_PHRASES = [
             'Nie udało się wykonać automatycznej zmiany statusu zamówienia, gdy wszystkie towary znalazły się na magazynach własnych. Niewystarczająca ilość towaru na stanie dyspozycyjnym'
@@ -658,7 +658,7 @@
     // LINKI Z ZAM DO ALLEGRO
     // ════════════════════════════════════════════════════════════════════════
 
-    if (url.includes('/panel/app/orderd.php')) {
+    if (url.includes('/panel/orderd.php') || url.includes('/panel/app/orderd.php')) {
 
         var allegroUrl = "https://salescenter.allegro.com/orders/";
         var empikUrl = "https://marketplace.empik.com/mmp/shop/order/";
@@ -740,7 +740,7 @@
     // INNE ZAMÓWIENIA KLIENTA W REALIZACJI
     // ════════════════════════════════════════════════════════════════════════
 
-    if (url.includes('/panel/app/orderd.php')) {
+    if (url.includes('/panel/orderd.php') || url.includes('/panel/app/orderd.php')) {
 
         function runOtherOrders() {
             const old = document.getElementById('tm-order-box');
