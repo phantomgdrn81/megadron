@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.5.2
+// @version      1.2.5.1
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -560,20 +560,21 @@
 
     if (url.includes('client6220.idosell.com')) {
 
-        // Dokładne tytuły (title obrazka kuriera) -> krótka etykieta.
-        // Tylko wpisane tu tytuły dostają etykietę - żadnego dopasowywania częściowego.
-        const allegroCourierMap = {
-            'Allegro Odbiór w Punkcie Orlen Paczka': 'Orlen Paczka',
-            'Allegro Automat Orlen Paczka': 'Orlen Paczka',
-            'Allegro Automat DPD Pickup': 'DPD',
-            'Allegro Automat DHL BOX 24/7 (AD)': 'DHL',
-            'Allegro Odbiór w Punkcie DHL (AD)': 'DHL',
-            'Allegro Paczkomaty 24/7 InPost - wszystkie rozmiary': 'InPost',
-            'InPost Paczkomaty 24/7 - wszystkie rozmiary': 'InPost',
-        };
+        const allegroCourierMap = [
+            { match: /orlen/i, label: 'Orlen Paczka' },
+            { match: /dpd/i, label: 'DPD' },
+            { match: /\bone\b/i, label: 'One Kurier' },
+            { match: /inpost/i, label: 'InPost' },
+            { match: /dhl/i, label: 'DHL' },
+            { match: /ups/i, label: 'UPS' },
+            { match: /pocztex/i, label: 'Pocztex' },
+        ];
 
         function getCourierLabel(name) {
-            return allegroCourierMap[name.trim()] || null;
+            for (const courier of allegroCourierMap) {
+                if (courier.match.test(name)) return courier.label;
+            }
+            return null;
         }
 
         function addCourierLabels() {
