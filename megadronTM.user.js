@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.5.1
+// @version      1.2.5.3
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -80,24 +80,6 @@
 
 
     // ════════════════════════════════════════════════════════════════════════
-    // WSPÓLNY PARSER DANYCH DOSTAWY (używany przez oba warianty gabarytów)
-    // ════════════════════════════════════════════════════════════════════════
-
-    function getOrderDeliveryData() {
-        const el = document.getElementById("deliverer-number-count_" + IAI._orderNumber);
-        if (!el) return null;
-        let raw = el.getAttribute("onclick");
-        if (!raw) return null;
-        raw = raw.replace('show_packages_edit_toplayer(event,', '').replace(/\)\s*$/, '');
-        try {
-            return JSON.parse(raw);
-        } catch (e) {
-            return null;
-        }
-    }
-
-
-    // ════════════════════════════════════════════════════════════════════════
     // WERYFIKACJA ZAM. SORTOWANIE WEDŁUG LOKALIZACJI
     // ════════════════════════════════════════════════════════════════════════
 
@@ -171,8 +153,11 @@
         });
 
         function addButtonsGabaryt() {
-            var jsonObject = getOrderDeliveryData();
-            if (!jsonObject) return;
+            var scriptDelivery = document.getElementById("deliverer-number-count_" + IAI._orderNumber);
+            scriptDelivery = scriptDelivery.getAttribute("onclick");
+            scriptDelivery = scriptDelivery.replace('show_packages_edit_toplayer(event,', '');
+            scriptDelivery = scriptDelivery.replace(')', '');
+            var jsonObject = JSON.parse(scriptDelivery);
             var packageId = jsonObject.delivery_packages.packs[0].id;
 
             if (!jsonObject.delivery_packages.packs[0].package_number) {
@@ -220,8 +205,13 @@
                 'Allegro One Box (',
             ];
 
-            var jsonObject = getOrderDeliveryData();
-            if (!jsonObject) return;
+            var deliveryEl = document.getElementById("deliverer-number-count_" + IAI._orderNumber);
+            if (!deliveryEl) return;
+
+            var scriptDelivery = deliveryEl.getAttribute("onclick");
+            scriptDelivery = scriptDelivery.replace('show_packages_edit_toplayer(event,', '');
+            scriptDelivery = scriptDelivery.replace(/\)\s*$/, '');
+            var jsonObject = JSON.parse(scriptDelivery);
 
             var matchedTitle = GB_COURIER_TITLES.find(function (title) {
                 return !!document.querySelector('[title="' + title + '"]');
@@ -560,21 +550,20 @@
 
     if (url.includes('client6220.idosell.com')) {
 
-        const allegroCourierMap = [
-            { match: /orlen/i, label: 'Orlen Paczka' },
-            { match: /dpd/i, label: 'DPD' },
-            { match: /\bone\b/i, label: 'One Kurier' },
-            { match: /inpost/i, label: 'InPost' },
-            { match: /dhl/i, label: 'DHL' },
-            { match: /ups/i, label: 'UPS' },
-            { match: /pocztex/i, label: 'Pocztex' },
-        ];
+        // Dokładne tytuły (title obrazka kuriera) -> krótka etykieta.
+        // Tylko wpisane tu tytuły dostają etykietę - żadnego dopasowywania częściowego.
+        const allegroCourierMap = {
+            'Allegro Odbiór w Punkcie Orlen Paczka': 'Orlen Paczka',
+            'Allegro Automat Orlen Paczka': 'Orlen Paczka',
+            'Allegro Automat DPD Pickup': 'DPD',
+            'Allegro Automat DHL BOX 24/7 (AD)': 'DHL',
+            'Allegro Odbiór w Punkcie DHL (AD)': 'DHL',
+            'Allegro Paczkomaty 24/7 InPost - wszystkie rozmiary': 'InPost',
+            'InPost Paczkomaty 24/7 - wszystkie rozmiary': 'InPost',
+        };
 
         function getCourierLabel(name) {
-            for (const courier of allegroCourierMap) {
-                if (courier.match.test(name)) return courier.label;
-            }
-            return null;
+            return allegroCourierMap[name.trim()] || null;
         }
 
         function addCourierLabels() {
