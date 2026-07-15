@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.5.3
+// @version      1.2.4.2
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -42,41 +42,6 @@
             return;
         }
     }
-
-
-    // ════════════════════════════════════════════════════════════════════════
-    // WSPÓLNY MUTATION DISPATCHER
-    // ════════════════════════════════════════════════════════════════════════
-
-    const tmDispatcher = (function () {
-        let observer = null;
-        const callbacks = [];
-        let scheduled = false;
-
-        function runAll() {
-            scheduled = false;
-            callbacks.forEach(function (fn) {
-                try { fn(); } catch (e) { console.error('[TM dispatcher]', e); }
-            });
-        }
-
-        function scheduleRun() {
-            if (scheduled) return;
-            scheduled = true;
-            setTimeout(runAll, 80);
-        }
-
-        function register(fn) {
-            callbacks.push(fn);
-            if (!observer) {
-                observer = new MutationObserver(scheduleRun);
-                observer.observe(document.documentElement, { childList: true, subtree: true });
-            }
-            fn();
-        }
-
-        return { register: register };
-    })();
 
 
     // ════════════════════════════════════════════════════════════════════════
@@ -302,8 +267,7 @@
                         });
                         if (!row) { callback(null); return; }
                         const cells = row.querySelectorAll('td');
-                        const value = cells[1] ? cells[1].textContent.trim() : null;
-                        callback(value);
+                        callback(cells[1] ? cells[1].textContent.trim() : null);
                     } catch (e) {
                         callback(null);
                     }
@@ -314,6 +278,8 @@
 
         function makeBadgeM1(m1) {
             const qty = parseInt(m1, 10);
+            if (m1 === null) {
+            }
             let displayM1 = m1 !== null ? m1 : '-';
             if (m1 === 'jest') {
                 displayM1 = "<i> elektronicznie </i>";
@@ -385,7 +351,9 @@
             });
         }
 
-        tmDispatcher.register(processLinksM1);
+        const observerM1 = new MutationObserver(processLinksM1);
+        observerM1.observe(document.documentElement, { childList: true, subtree: true });
+        processLinksM1();
     }
 
 
@@ -471,13 +439,42 @@
             updateSummaryHistory();
         }
 
-        function tmHistoryTick() {
-            ensureUI();
-            processRowsHistory(document);
+        function scheduleRescanSequence() {
+            [0, 200, 600, 1200, 2000].forEach(d => setTimeout(() => processRowsHistory(document), d));
+        }
+
+        function hookHistoryClick() {
+            document.addEventListener('click', (e) => {
+                const a = e.target && e.target.closest ? e.target.closest('a') : null;
+                if (!a) return;
+                const onclick = a.getAttribute('onclick') || '';
+                const txt = (a.textContent || '').trim();
+                if (txt === 'Historia zamówienia' || onclick.includes('IAI._orderd.orderHistory(')) {
+                    scheduleRescanSequence();
+                }
+            }, true);
+        }
+
+        function observeDomHistory() {
+            const obs = new MutationObserver(mutations => {
+                for (const m of mutations) {
+                    for (const node of m.addedNodes) {
+                        if (!(node instanceof HTMLElement)) continue;
+                        if (node.matches?.('div.hd#orderHistoryDiv_h') || node.querySelector?.('div.hd#orderHistoryDiv_h')) {
+                            ensureUI();
+                        }
+                        processRowsHistory(node);
+                    }
+                }
+            });
+            obs.observe(document.documentElement, { childList: true, subtree: true });
         }
 
         function startHistory() {
-            tmDispatcher.register(tmHistoryTick);
+            ensureUI();
+            processRowsHistory(document);
+            hookHistoryClick();
+            observeDomHistory();
         }
 
         if (document.readyState === 'loading') {
@@ -540,7 +537,8 @@
             });
         }
 
-        tmDispatcher.register(initTooltip);
+        initTooltip();
+        new MutationObserver(initTooltip).observe(document.documentElement, { childList: true, subtree: true });
     }
 
 
@@ -550,20 +548,21 @@
 
     if (url.includes('client6220.idosell.com')) {
 
-        // Dokładne tytuły (title obrazka kuriera) -> krótka etykieta.
-        // Tylko wpisane tu tytuły dostają etykietę - żadnego dopasowywania częściowego.
-        const allegroCourierMap = {
-            'Allegro Odbiór w Punkcie Orlen Paczka': 'Orlen Paczka',
-            'Allegro Automat Orlen Paczka': 'Orlen Paczka',
-            'Allegro Automat DPD Pickup': 'DPD',
-            'Allegro Automat DHL BOX 24/7 (AD)': 'DHL',
-            'Allegro Odbiór w Punkcie DHL (AD)': 'DHL',
-            'Allegro Paczkomaty 24/7 InPost - wszystkie rozmiary': 'InPost',
-            'InPost Paczkomaty 24/7 - wszystkie rozmiary': 'InPost',
-        };
+        const allegroCourierMap = [
+            { match: /orlen/i, label: 'Orlen Paczka' },
+            { match: /dpd/i, label: 'DPD' },
+            { match: /\bone\b/i, label: 'One Kurier' },
+            { match: /inpost/i, label: 'InPost' },
+            { match: /dhl/i, label: 'DHL' },
+            { match: /ups/i, label: 'UPS' },
+            { match: /pocztex/i, label: 'Pocztex' },
+        ];
 
         function getCourierLabel(name) {
-            return allegroCourierMap[name.trim()] || null;
+            for (const courier of allegroCourierMap) {
+                if (courier.match.test(name)) return courier.label;
+            }
+            return null;
         }
 
         function addCourierLabels() {
@@ -593,7 +592,8 @@
             });
         }
 
-        tmDispatcher.register(addCourierLabels);
+        addCourierLabels();
+        new MutationObserver(addCourierLabels).observe(document.documentElement, { childList: true, subtree: true });
     }
 
 
@@ -639,7 +639,8 @@
         }
 
         addStylesSN();
-        tmDispatcher.register(convertLinks);
+        convertLinks();
+        new MutationObserver(convertLinks).observe(document.documentElement, { childList: true, subtree: true });
     }
 
 
@@ -776,7 +777,19 @@
             document.body.appendChild(box);
         }
 
-        tmDispatcher.register(runOtherOrders);
+        let debounceOther;
+        const observerOther = new MutationObserver(() => {
+            clearTimeout(debounceOther);
+            debounceOther = setTimeout(runOtherOrders, 600);
+        });
+        observerOther.observe(document.documentElement, { childList: true, subtree: true });
+        setTimeout(() => { observerOther.disconnect(); runOtherOrders(); }, 8000);
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', runOtherOrders);
+        } else {
+            runOtherOrders();
+        }
     }
 
 
@@ -816,7 +829,19 @@
             });
         }
 
-        tmDispatcher.register(runDuplicates);
+        let debounceDup;
+        const observerDup = new MutationObserver(() => {
+            clearTimeout(debounceDup);
+            debounceDup = setTimeout(runDuplicates, 600);
+        });
+        observerDup.observe(document.documentElement, { childList: true, subtree: true });
+        setTimeout(() => { observerDup.disconnect(); runDuplicates(); }, 8000);
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', runDuplicates);
+        } else {
+            runDuplicates();
+        }
     }
 
 
@@ -845,7 +870,19 @@
             });
         }
 
-        tmDispatcher.register(runApiOrders);
+        let debounceApi;
+        const observerApi = new MutationObserver(() => {
+            clearTimeout(debounceApi);
+            debounceApi = setTimeout(runApiOrders, 600);
+        });
+        observerApi.observe(document.documentElement, { childList: true, subtree: true });
+        setTimeout(() => { observerApi.disconnect(); runApiOrders(); }, 8000);
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', runApiOrders);
+        } else {
+            runApiOrders();
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -1205,7 +1242,8 @@
         // SELLER ID - ID Z NAGŁÓWKA ALLEGRO
         const AZ_SELLER_ID = '38153188';
 
-        const AZ_MAX_CONCURRENT = 8;
+        const AZ_CACHE_TTL_MS = 15 * 60 * 1000;
+        const AZ_MAX_CONCURRENT = 5;
         const AZ_ROW_WAIT_TIMEOUT_MS = 60000;
 
         const AZ_STATUS_INFO = {
@@ -1244,6 +1282,20 @@
             return (fn) => new Promise((resolve, reject) => { queue.push({ fn, resolve, reject }); next(); });
         }
         const azEnqueue = azCreateQueue(AZ_MAX_CONCURRENT);
+
+        function azGetCached(orderNumber) {
+            const raw = GM_getValue('azOrder2_' + orderNumber, null);
+            if (!raw) return null;
+            try {
+                const data = JSON.parse(raw);
+                if (Date.now() - data.ts > AZ_CACHE_TTL_MS) return null;
+                return data.status;
+            } catch { return null; }
+        }
+        function azSetCached(orderNumber, status) {
+            GM_setValue('azOrder2_' + orderNumber, JSON.stringify({ status, ts: Date.now() }));
+        }
+
 
         function azExtractAllegroOrders(data) {
             const records = data?.records || [];
@@ -1309,39 +1361,42 @@
             const orders = azExtractAllegroOrders(listData);
             if (orders.length === 0) return;
 
-            const statusByOrder = new Map();
-            const pendingRender = new Set(orders.map(o => o.orderNumber));
+            const pending = new Map(orders.map(o => [o.orderNumber, o.uuid]));
 
             function tryRenderAll() {
-                for (const orderNumber of pendingRender) {
-                    if (!statusByOrder.has(orderNumber)) continue;
+                for (const [orderNumber, uuid] of pending.entries()) {
                     const cell = azFindRowCellByOrderNumber(orderNumber);
                     if (!cell) continue;
-                    azRenderStatus(cell, statusByOrder.get(orderNumber));
-                    pendingRender.delete(orderNumber);
-                }
-                if (pendingRender.size === 0) {
-                    observer.disconnect();
-                    clearInterval(poll);
+                    pending.delete(orderNumber);
+
+                    const cachedStatus = azGetCached(orderNumber);
+                    if (cachedStatus !== null) {
+                        azRenderStatus(cell, cachedStatus);
+                        continue;
+                    }
+
+                    azEnqueue(() => azFetchAllegroStatus(uuid))
+                        .then((status) => {
+                            if (status) azSetCached(orderNumber, status);
+                            azRenderStatus(cell, status);
+                        })
+                        .catch((e) => console.error('[allegro-zwroty] blad pobierania statusu dla', orderNumber, e));
                 }
             }
 
-            orders.forEach(({ orderNumber, uuid }) => {
-                azEnqueue(() => azFetchAllegroStatus(uuid))
-                    .then((status) => {
-                        statusByOrder.set(orderNumber, status);
-                        tryRenderAll();
-                    })
-                    .catch((e) => console.error('[allegro-zwroty] blad pobierania statusu dla', orderNumber, e));
-            });
-
             tryRenderAll();
-            if (pendingRender.size === 0) return;
+            if (pending.size === 0) return;
 
-            const observer = new MutationObserver(tryRenderAll);
+            const observer = new MutationObserver(() => {
+                tryRenderAll();
+                if (pending.size === 0) { observer.disconnect(); clearInterval(poll); }
+            });
             observer.observe(document.documentElement, { childList: true, subtree: true });
 
-            const poll = setInterval(tryRenderAll, 1000);
+            const poll = setInterval(() => {
+                tryRenderAll();
+                if (pending.size === 0) { observer.disconnect(); clearInterval(poll); }
+            }, 1000);
 
             setTimeout(() => { observer.disconnect(); clearInterval(poll); }, AZ_ROW_WAIT_TIMEOUT_MS);
         }
