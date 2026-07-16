@@ -1,14 +1,12 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.5
+// @version      1.2.6
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
 // @match        https://megadron.pl/pl/products/*
 // @grant        GM_xmlhttpRequest
-// @grant        GM_getValue
-// @grant        GM_setValue
 // @grant        unsafeWindow
 // @connect      client6220.idosell.com
 // @connect      edge.salescenter.allegro.com
@@ -139,7 +137,7 @@
                     newDiv += "<input type=\"button\" value=\"Gabaryt B\" onclick=\"IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'defaultParcelGauge=medium&courierId=" + jsonObject.deliverer_id + "&action=generate&orders[]=" + jsonObject.order_id + "'); $('#wyborGabarytu').html('<br/><b>Przypisano gabaryt B!</b>'); document.querySelector('#fg_code').focus();\" style=\"margin-top:20px; height:50px; font-size:15px; border-radius: 3px\" class=\"btn btn-sm btn-warning formbutton\">";
                     newDiv += "<input type=\"button\" value=\"Gabaryt C\" onclick=\"IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'defaultParcelGauge=large&courierId=" + jsonObject.deliverer_id + "&action=generate&orders[]=" + jsonObject.order_id + "'); $('#wyborGabarytu').html('<br/><b>Przypisano gabaryt C!</b>'); document.querySelector('#fg_code').focus();\" style=\"margin-top:20px; height:50px; font-size:15px; border-radius: 3px\" class=\"btn btn-sm btn-danger formbutton\">";
                     mydiv.innerHTML += newDiv;
-                } else {
+                } else if (!/^Allegro\b/i.test(jsonObject.deliverer_name || '')) {
                     IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'courierId=' + jsonObject.deliverer_id + '&action=generate&orders[]=' + jsonObject.order_id);
                 }
             }
@@ -155,20 +153,27 @@
     if (url.includes('/panel/order-verification.php')) {
 
         window.addEventListener("load", () => {
-            addButtonsGabarytAllegro();
+            [0, 300, 700, 1200, 2000, 3000].forEach(d => setTimeout(addButtonsGabarytAllegro, d));
         });
 
         function addButtonsGabarytAllegro() {
+            if (document.getElementById('wyborGabarytu')) return;
+
             var GB_COURIER_TITLES = [
                 'Allegro Automat DPD Pickup',
                 'Allegro Odbiór w Punkcie Orlen Paczka',
                 'Allegro Automat Orlen Paczka',
                 'Allegro Automat DHL BOX 24/7 (AD)',
                 'Allegro Odbiór w Punkcie DHL (AD)',
+                'Allegro One Box (One Kurier)',
+                'Allegro One Box (DPD)',
+                'Allegro One Kurier - dostawa na jutro',
             ];
-            var GB_COURIER_PREFIXES = [
-                'Allegro One Box (',
-            ];
+
+            var matchedTitle = GB_COURIER_TITLES.find(function (title) {
+                return !!document.querySelector('[title="' + title + '"]');
+            });
+            if (!matchedTitle) return;
 
             var deliveryEl = document.getElementById("deliverer-number-count_" + IAI._orderNumber);
             if (!deliveryEl) return;
@@ -178,35 +183,36 @@
             scriptDelivery = scriptDelivery.replace(/\)\s*$/, '');
             var jsonObject = JSON.parse(scriptDelivery);
 
-            var matchedTitle = GB_COURIER_TITLES.find(function (title) {
-                return !!document.querySelector('[title="' + title + '"]');
-            }) || GB_COURIER_PREFIXES.find(function (prefix) {
-                return !!document.querySelector('[title^="' + prefix + '"]');
-            });
-            if (!matchedTitle) return;
-
             if (jsonObject.delivery_packages.packs[0].package_number) return;
 
-            if (document.getElementById('wyborGabarytu')) return;
-
-            var mydiv = document.querySelector("#tr_0 > td:nth-child(5)");
+            var mydiv = deliveryEl.closest('td');
             if (!mydiv) return;
 
             var wrap = document.createElement('div');
             wrap.id = 'wyborGabarytu';
             wrap.innerHTML = '<br/>';
 
-            var gauges = [
-                { label: 'Gabaryt A', value: 'S', cls: 'btn btn-sm btn-success formbutton' },
-                { label: 'Gabaryt B', value: 'M', cls: 'btn btn-sm btn-warning formbutton' },
-                { label: 'Gabaryt C', value: 'L', cls: 'btn btn-sm btn-danger formbutton' },
+            var btnClasses = [
+                'btn btn-sm btn-success formbutton',
+                'btn btn-sm btn-warning formbutton',
+                'btn btn-sm btn-danger formbutton',
+                'btn btn-sm btn-default formbutton',
             ];
 
-            gauges.forEach(function (g) {
+            var gaugeSelect = document.querySelector('select#fg_defaultParcelGauge');
+            var gauges = (gaugeSelect && gaugeSelect.options.length > 0)
+                ? [...gaugeSelect.options].filter(o => o.value).map(o => ({ value: o.value, label: o.textContent.trim() }))
+                : [
+                    { value: 'S', label: 'Gabaryt A' },
+                    { value: 'M', label: 'Gabaryt B' },
+                    { value: 'L', label: 'Gabaryt C' },
+                ];
+
+            gauges.forEach(function (g, i) {
                 var btn = document.createElement('input');
                 btn.type = 'button';
                 btn.value = g.label;
-                btn.className = g.cls;
+                btn.className = btnClasses[i] || 'btn btn-sm btn-default formbutton';
                 btn.style.cssText = 'margin-top:20px; height:50px; font-size:15px; border-radius: 3px';
                 btn.addEventListener('click', function () {
                     IAI.ajax.post(
@@ -216,7 +222,7 @@
                         '&action=generate&orders[]=' + jsonObject.order_id
                     );
 
-                    wrap.innerHTML = '<br/><b>Przypisano gabaryt ' + g.label.slice(-1) + '!</b>';
+                    wrap.innerHTML = '<br/><b>Przypisano gabaryt ' + g.value + '!</b>';
 
                     var fgCode = document.querySelector('#fg_code');
                     if (fgCode) fgCode.focus();
@@ -1242,7 +1248,6 @@
         // SELLER ID - ID Z NAGŁÓWKA ALLEGRO
         const AZ_SELLER_ID = '38153188';
 
-        const AZ_CACHE_TTL_MS = 15 * 60 * 1000;
         const AZ_MAX_CONCURRENT = 5;
         const AZ_ROW_WAIT_TIMEOUT_MS = 60000;
 
@@ -1282,20 +1287,6 @@
             return (fn) => new Promise((resolve, reject) => { queue.push({ fn, resolve, reject }); next(); });
         }
         const azEnqueue = azCreateQueue(AZ_MAX_CONCURRENT);
-
-        function azGetCached(orderNumber) {
-            const raw = GM_getValue('azOrder2_' + orderNumber, null);
-            if (!raw) return null;
-            try {
-                const data = JSON.parse(raw);
-                if (Date.now() - data.ts > AZ_CACHE_TTL_MS) return null;
-                return data.status;
-            } catch { return null; }
-        }
-        function azSetCached(orderNumber, status) {
-            GM_setValue('azOrder2_' + orderNumber, JSON.stringify({ status, ts: Date.now() }));
-        }
-
 
         function azExtractAllegroOrders(data) {
             const records = data?.records || [];
@@ -1369,15 +1360,8 @@
                     if (!cell) continue;
                     pending.delete(orderNumber);
 
-                    const cachedStatus = azGetCached(orderNumber);
-                    if (cachedStatus !== null) {
-                        azRenderStatus(cell, cachedStatus);
-                        continue;
-                    }
-
                     azEnqueue(() => azFetchAllegroStatus(uuid))
                         .then((status) => {
-                            if (status) azSetCached(orderNumber, status);
                             azRenderStatus(cell, status);
                         })
                         .catch((e) => console.error('[allegro-zwroty] blad pobierania statusu dla', orderNumber, e));
