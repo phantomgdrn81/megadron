@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.6
+// @version      1.2.7
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -892,214 +892,169 @@
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // PRZEKIEROWANIE DO IDOSELL NA MEGADRON.PL
+    // MEGABAR
     // ════════════════════════════════════════════════════════════════════════
 
-    if (url.includes('megadron.pl/pl/products')) {
+if (url.includes('megadron.pl/pl/products')) {
+    const skuFromUrl = (window.location.pathname.match(/-(\d+)\.html$/) || [])[1];
 
-        const skuFromUrl = (window.location.pathname.match(/-(\d+)\.html$/) || [])[1];
-        if (skuFromUrl) {
-            const skuUrl = 'https://client6220.idosell.com/panel/product.php?idt=' + skuFromUrl;
-
-            function waitForElementMegadronLink(selector, callback, timeout = 10000) {
+    if (skuFromUrl) {
+        function waitForElement(selector, callback, timeout = 10000) {
+            const el = document.querySelector(selector);
+            if (el) { callback(el); return; }
+            const observer = new MutationObserver(() => {
                 const el = document.querySelector(selector);
-                if (el) { callback(el); return; }
-                const observer = new MutationObserver(() => {
-                    const el = document.querySelector(selector);
-                    if (el) { observer.disconnect(); callback(el); }
-                });
-                observer.observe(document.documentElement, { childList: true, subtree: true });
-                setTimeout(() => observer.disconnect(), timeout);
-            }
-
-            waitForElementMegadronLink('.product_name__actions', function (actionsBar) {
-                const badge = document.createElement('a');
-                badge.href = skuUrl;
-                badge.target = '_blank';
-                badge.rel = 'noopener noreferrer';
-                badge.style.cssText = `
-                    padding:4px 10px;
-                    margin-bottom:8px;
-                    margin-right:8px;
-                    background:#cce5ff;
-                    border:1px solid #004085;
-                    border-radius:4px;
-                    font-size:14px;
-                    font-weight:bold;
-                    display:inline-block;
-                    width:fit-content;
-                    cursor:pointer;
-                    color:#004085;
-                    text-decoration:none;
-                `;
-                badge.innerHTML = 'IDOSELL';
-                actionsBar.insertAdjacentElement('afterbegin', badge);
+                if (el) { observer.disconnect(); callback(el); }
             });
+            observer.observe(document.documentElement, { childList: true, subtree: true });
+            setTimeout(() => observer.disconnect(), timeout);
         }
-    }
+
+        const baseStyle = `
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            margin-right: 8px;
+            margin-bottom: 8px;
+            background-color: #f8f9fa;
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            color: #334155;
+            text-decoration: none;
+            white-space: nowrap;
+            width: fit-content;
+            line-height: 1.2;
+            box-sizing: border-box;
+            transition: all 0.2s ease;
+        `;
+
+        // ikonki style
+        const iconPin = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-10a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>`;
+        const iconCheck = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
+        const iconCross = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
+        const iconLink = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
+
+        waitForElement('.product_name__actions', function (actionsBar) {
+
+            // 1. badge DYSPOZYCYJNY
+            const badgeDysp = document.createElement('div');
+            badgeDysp.style.cssText = baseStyle;
+            badgeDysp.innerHTML = `${iconCheck} <span>Dyspozycyjny M1: <strong>ładowanie...</strong></span>`;
+
+            // 2. badge LOKALIZACJA
+            const badgeLoc = document.createElement('div');
+            badgeLoc.style.cssText = baseStyle;
+            badgeLoc.innerHTML = `${iconPin} <strong>ładowanie...</strong>`;
+
+            // 3. badge IDOSELL
+            const badgeIdosell = document.createElement('a');
+            badgeIdosell.href = `https://client6220.idosell.com/panel/app/product.php?idt=${skuFromUrl}`;
+            badgeIdosell.target = '_blank';
+            badgeIdosell.rel = 'noopener noreferrer';
+            badgeIdosell.style.cssText = baseStyle + `cursor: pointer;`;
+            badgeIdosell.innerHTML = `<span>Idosell</span> ${iconLink}`;
+
+            badgeIdosell.onmouseover = () => {
+                badgeIdosell.style.borderColor = '#cbd5e1';
+                badgeIdosell.style.backgroundColor = '#f1f5f9';
+            };
+            badgeIdosell.onmouseout = () => {
+                badgeIdosell.style.borderColor = '#e2e8f0';
+                badgeIdosell.style.backgroundColor = '#f8f9fa';
+            };
+
+            actionsBar.insertAdjacentElement('afterbegin', badgeIdosell);
+            actionsBar.insertAdjacentElement('afterbegin', badgeLoc);
+            actionsBar.insertAdjacentElement('afterbegin', badgeDysp);
 
 
-    // ════════════════════════════════════════════════════════════════════════
-    // LOKALIZACJA NA MAG. Z IDOSELL NA MEGADRON.PL
-    // ════════════════════════════════════════════════════════════════════════
+            // ────────────────────────────────────────────────────────────────
+            // LOKALIZACJA
+            // ────────────────────────────────────────────────────────────────
+            GM_xmlhttpRequest({
+                method: 'POST',
+                url: 'https://client6220.idosell.com/panel/ajax/product-location.php',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Referer': `https://client6220.idosell.com/panel/product-edit.php?idt=${skuFromUrl}`
+                },
+                data: `action=getLocations&product=${skuFromUrl}`,
+                onload: function (response) {
+                    try {
+                        const json = JSON.parse(response.responseText);
+                        const doc = new DOMParser().parseFromString(json.htmlData, 'text/html');
+                        const inputs = doc.querySelectorAll('input[type="text"][name*="location_id_sel[1]"]');
+                        let lokalizacja = null;
 
-    if (url.includes('megadron.pl/pl/products/')) {
-
-        const idtFromUrl2 = (window.location.pathname.match(/-(\d+)\.html$/) || [])[1];
-        if (idtFromUrl2) {
-            function waitForElementLokalizacja(selector, callback, timeout = 10000) {
-                const el = document.querySelector(selector);
-                if (el) { callback(el); return; }
-                const observer = new MutationObserver(() => {
-                    const el = document.querySelector(selector);
-                    if (el) { observer.disconnect(); callback(el); }
-                });
-                observer.observe(document.documentElement, { childList: true, subtree: true });
-                setTimeout(() => observer.disconnect(), timeout);
-            }
-
-            waitForElementLokalizacja('.product_name__actions', function (actionsBar) {
-                const badge = document.createElement('div');
-                badge.style.cssText = `
-                padding:4px 10px;
-                margin-bottom:8px;
-                margin-right:20px;
-                background:#fff3cd;
-                border:1px solid #ffc107;
-                border-radius:4px;
-                font-size:14px;
-                display:inline-flex;
-                align-items:center;
-                white-space:nowrap;
-                width:fit-content;
-                `;
-                badge.innerHTML = '📦 Lokalizacja: <strong>ładowanie...</strong>';
-                actionsBar.insertAdjacentElement('afterbegin', badge);
-
-                GM_xmlhttpRequest({
-                    method: 'POST',
-                    url: 'https://client6220.idosell.com/panel/ajax/product-location.php',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                        'X-Requested-With': 'XMLHttpRequest',
-                        'Referer': `https://client6220.idosell.com/panel/product-edit.php?idt=${idtFromUrl2}`
-                    },
-                    data: `action=getLocations&product=${idtFromUrl2}`,
-                    onload: function (response) {
-                        try {
-                            const json = JSON.parse(response.responseText);
-                            const doc = new DOMParser().parseFromString(json.htmlData, 'text/html');
-                            const inputs = doc.querySelectorAll('input[type="text"][name*="location_id_sel[1]"]');
-                            let lokalizacja = null;
-                            inputs.forEach(input => {
-                                if (input.value && input.value.trim() !== '' && !lokalizacja) {
-                                    lokalizacja = input.value.trim();
-                                }
-                            });
-                            if (lokalizacja) {
-                                badge.innerHTML = `📦: <strong>${lokalizacja}</strong>`;
-                                badge.style.background = '#d4edda';
-                                badge.style.borderColor = '#28a745';
-                            } else {
-                                badge.innerHTML = '📦: <strong>brak lokalizacji</strong>';
-                                badge.style.background = '#f8f9fa';
-                                badge.style.borderColor = '#6c757d';
+                        inputs.forEach(input => {
+                            if (input.value && input.value.trim() !== '' && !lokalizacja) {
+                                lokalizacja = input.value.trim();
                             }
-                        } catch (e) {
-                            badge.innerHTML = '📦: <strong>błąd parsowania</strong>';
-                            badge.style.background = '#f8d7da';
-                            badge.style.borderColor = '#dc3545';
+                        });
+
+                        if (lokalizacja) {
+                            badgeLoc.innerHTML = `${iconPin} <span> Lokalizacja: <strong>${lokalizacja}</strong></span>`;
+                        } else {
+                            badgeLoc.innerHTML = `${iconPin} <span style="color:#64748b;">brak lokalizacji</span>`;
                         }
-                    },
-                    onerror: function () {
-                        badge.innerHTML = '📦 Lokalizacja: <strong>błąd połączenia</strong>';
-                        badge.style.background = '#f8d7da';
-                        badge.style.borderColor = '#dc3545';
+                    } catch (e) {
+                        badgeLoc.innerHTML = `${iconCross} <span style="color:#dc2626;">błąd lokalizacji</span>`;
                     }
-                });
+                },
+                onerror: function () {
+                    badgeLoc.innerHTML = `${iconCross} <span style="color:#dc2626;">błąd połączenia</span>`;
+                }
             });
-        }
-    }
 
 
-    // ════════════════════════════════════════════════════════════════════════
-    // STAN DYSPOZYCYJNY M1 NA MEGADRON.PL
-    // ════════════════════════════════════════════════════════════════════════
+            // ────────────────────────────────────────────────────────────────
+            // DYSPOZYCYJNY M1
+            // ────────────────────────────────────────────────────────────────
+            GM_xmlhttpRequest({
+                method: 'POST',
+                url: `https://client6220.idosell.com/panel/ajax/product-edit-aceform-tables.php?name=reserved&idt=${skuFromUrl}&filtered=false`,
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Referer': `https://client6220.idosell.com/panel/product-edit.php?idt=${skuFromUrl}`
+                },
+                data: `id=stocksReserved&url=/panel/ajax/product-edit-aceform-tables.php%3Fname%3Dreserved%26idt%3D${skuFromUrl}%26filtered%3Dfalse`,
+                onload: function (response) {
+                    try {
+                        const doc = new DOMParser().parseFromString(response.responseText, 'text/html');
+                        const row = doc.querySelector('table tbody tr');
 
-    if (url.includes('megadron.pl/pl/products/')) {
-
-        const idtMgdrn = (window.location.pathname.match(/-(\d+)\.html$/) || [])[1];
-        if (idtMgdrn) {
-            function waitForElementDysp(selector, callback, timeout = 10000) {
-                const el = document.querySelector(selector);
-                if (el) { callback(el); return; }
-                const observer = new MutationObserver(() => {
-                    const el = document.querySelector(selector);
-                    if (el) { observer.disconnect(); callback(el); }
-                });
-                observer.observe(document.documentElement, { childList: true, subtree: true });
-                setTimeout(() => observer.disconnect(), timeout);
-            }
-
-            waitForElementDysp('.product_name__actions', function (actionsBar) {
-                const badge = document.createElement('div');
-                badge.style.cssText = `
-                padding:4px 10px;
-                margin-bottom:8px;
-                margin-right:8px;
-                background:#fff3cd;
-                border:1px solid #ffc107;
-                border-radius:4px;
-                font-size:14px;
-                display:inline-flex;
-                align-items:center;
-                white-space:nowrap;
-                width:fit-content;
-                `;
-                badge.innerHTML = '🔃 Dyspozycyjny M1: <strong>ładowanie...</strong>';
-                actionsBar.insertAdjacentElement('afterbegin', badge);
-
-                GM_xmlhttpRequest({
-                    method: 'POST',
-                    url: `https://client6220.idosell.com/panel/ajax/product-edit-aceform-tables.php?name=reserved&idt=${idtMgdrn}&filtered=false`,
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                        'X-Requested-With': 'XMLHttpRequest',
-                        'Referer': `https://client6220.idosell.com/panel/product-edit.php?idt=${idtMgdrn}`
-                    },
-                    data: `id=stocksReserved&url=/panel/ajax/product-edit-aceform-tables.php%3Fname%3Dreserved%26idt%3D${idtMgdrn}%26filtered%3Dfalse`,
-                    onload: function (response) {
-                        try {
-                            const doc = new DOMParser().parseFromString(response.responseText, 'text/html');
-                            const row = doc.querySelector('table tbody tr');
-                            if (!row) {
-                                badge.innerHTML = '❓ Dyspozycyjny M1: <strong>brak danych</strong>';
-                                return;
-                            }
-                            const cells = row.querySelectorAll('td');
-                            const raw = cells[1] ? cells[1].textContent.trim() : '-';
-                            const val = raw === '-' ? 0 : parseInt(raw, 10);
-                            const parsedVal = isNaN(val) ? 0 : val;
-                            const disp = parsedVal === 0 ? 'BRAK' : parsedVal;
-                            badge.style.background = '#FDF5E6';
-                            badge.style.borderColor = '#D2B48C';
-                            badge.innerHTML = `✅ Dyspozycyjny M1: <strong>${disp}</strong>`;
-                        } catch (e) {
-                            badge.innerHTML = '❌ Dyspozycyjny M1: <strong>ERROR</strong>';
-                            badge.style.background = '#f8d7da';
-                            badge.style.borderColor = '#dc3545';
+                        if (!row) {
+                            badgeDysp.innerHTML = `${iconCross} <span>Dyspozycyjny M1: <strong>brak danych</strong></span>`;
+                            return;
                         }
-                    },
-                    onerror: function () {
-                        badge.innerHTML = '❓ Dyspozycyjny M1: <strong>błąd połączenia - zaloguj się na idosell!</strong>';
-                        badge.style.background = '#f8d7da';
-                        badge.style.borderColor = '#dc3545';
-                    }
-                });
-            });
-        }
-    }
 
+                        const cells = row.querySelectorAll('td');
+                        const raw = cells[1] ? cells[1].textContent.trim() : '-';
+                        const val = raw === '-' ? 0 : parseInt(raw, 10);
+                        const parsedVal = isNaN(val) ? 0 : val;
+
+                        if (parsedVal > 0) {
+                            badgeDysp.innerHTML = `${iconCheck} <span>Dyspozycyjny M1: <strong>${parsedVal}</strong></span>`;
+                        } else {
+                            badgeDysp.innerHTML = `${iconCross} <span>Dyspozycyjny M1: <strong>BRAK</strong></span>`;
+                        }
+                    } catch (e) {
+                        badgeDysp.innerHTML = `${iconCross} <span style="color:#dc2626;">Dyspozycyjny M1: <strong>ERROR</strong></span>`;
+                    }
+                },
+                onerror: function () {
+                    badgeDysp.innerHTML = `${iconCross} <span style="color:#dc2626;">Zaloguj do IdoSell</span>`;
+                }
+            });
+
+        });
+    }
+}
     // ════════════════════════════════════════════════════════════════════════
     // NUMERY SERYJNE - REAKCJA NA ENTER/SKANER + TOAST Z SN'AMI
     // ════════════════════════════════════════════════════════════════════════
