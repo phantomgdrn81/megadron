@@ -1,13 +1,16 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.7
+// @version      1.2.8
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
 // @match        https://megadron.pl/pl/products/*
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_addStyle
 // @connect      client6220.idosell.com
 // @connect      edge.salescenter.allegro.com
 // @run-at       document-start
@@ -1375,6 +1378,641 @@ if (url.includes('megadron.pl/pl/products')) {
 
         azInstallHooks();
         azInjectHighlightStyle();
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // STATUSY W PASKU BOCZNYM (sekcja „Statusy” z licznikami zamówień)
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (window.self === window.top && url.includes('/panel/')) {
+        const tmStatusyStart = () => {
+        (function () {
+          'use strict';
+
+          // ---------- storage ----------
+          const HOST = location.host;
+          const K = (k) => `${HOST}:${k}`;
+          const load = (k, d) => {
+            try { const v = GM_getValue(K(k)); return v === undefined ? d : JSON.parse(v); } catch (e) { return d; }
+          };
+          const save = (k, v) => { try { GM_setValue(K(k), JSON.stringify(v)); } catch (e) { /* ignore */ } };
+
+          const DEFAULT_SELECTED = ['wn', 'n', 'o', 'b', 'p', 'w'];
+          const STATUS_TTL = 24 * 3600 * 1000;
+          const PANEL_CONCURRENCY = 2;   // ciężkie zapytania panelu
+          const API_CONCURRENCY = 3;     // lekkie zapytania Admin API
+          const API_URL = '/api/admin/v8/orders/orders/search';
+
+          // Kod statusu w panelu -> status w Admin API (orders/orders/search, pole ordersStatuses).
+          // Kody bez odpowiednika (br, z, l, r, wd, wp, wr, wn) i podstatusy (np. b-110) liczone są przez panel.
+          const API_STATUS = {
+            n: 'new', o: 'on_order', b: 'packed', p: 'ready', w: 'payment_waiting',
+            d: 'delivery_waiting', h: 'suspended', t: 'finished', j: 'joined',
+            k: 'canceled', i: 'false', s: 'lost', a: 'finished_ext',
+          };
+
+          // „* wszystkie nieobsłużone” (wn) = n+o+b+br+p+w+d+h+wp(+wd+wr) – sprawdzone na sumach z panelu.
+          // Statusy z odpowiednikiem w API liczone jednym zapytaniem, reszta (zwykle kilka zamówień) przez panel.
+          const WN_API = ['new', 'on_order', 'packed', 'ready', 'payment_waiting', 'delivery_waiting', 'suspended'];
+          const WN_PANEL = ['br', 'wp', 'wd', 'wr'];
+          const viaApi = (code) => !!(API_STATUS[code] || code === 'wn');
+
+          // Kolory statusów: panel definiuje zmienne CSS --color-status-<nazwa> (te same co na liście zamówień).
+          const COLOR_NAME = {
+            n: 'new', o: 'on_order', b: 'packed', br: 'packed_ready', p: 'ready', w: 'payment_waiting',
+            d: 'delivery_waiting', h: 'suspended', t: 'finished', j: 'joined', k: 'canceled', i: 'false',
+            s: 'lost', z: 'returned', l: 'missing', r: 'complainted', a: 'finished_ext',
+            wd: 'wait_for_dispatch', wp: 'wait_for_packaging', wr: 'wait_for_receive',
+          };
+          function colorOf(code) {
+            const name = COLOR_NAME[code.split('-')[0]]; // podstatus dziedziczy kolor statusu nadrzędnego
+            if (!name) return null;
+            const v = getComputedStyle(document.documentElement).getPropertyValue('--color-status-' + name).trim();
+            return v || null;
+          }
+
+          let statuses = load('statuses', null);      // {ts, list:[{code,name,sub,parent}], views:[{id,name}]}
+          let selected = load('selected', DEFAULT_SELECTED);
+          let counts = load('counts', {});            // {code: n}
+          let countView = load('view', '');            // '' = domyślny widok użytkownika
+          let apiKey = load('apiKey', '');             // klucz Admin API (opcjonalny, wpisuje użytkownik)
+          const fresh = {};                            // code -> true (pobrane w tym załadowaniu strony)
+          const errors = {};                           // code -> message
+          const meta = {};                             // code -> {src:'API'|'panel', ms, note}
+          let fetchStarted = false;
+
+          // ---------- styles ----------
+          GM_addStyle(`
+            #tm-statusy .tm-hdr{display:flex;align-items:center;cursor:grab}
+            #tm-statusy.tm-section-dragging{opacity:.45}
+            #tm-statusy .tm-gear{margin-left:auto;cursor:pointer;font-size:16px;line-height:1;opacity:.7;border-radius:4px;padding:2px;user-select:none}
+            #tm-statusy .tm-gear:hover{opacity:1;background:rgba(255,255,255,.1)}
+            #tm-statusy a.tm-item{text-decoration:none;color:inherit;display:flex;width:100%;box-sizing:border-box}
+            #tm-statusy a.tm-item[draggable=true]{cursor:pointer}
+            #tm-statusy a.tm-item.tm-dragging{opacity:.4}
+            #tm-statusy a.tm-item.tm-over-top{box-shadow:inset 0 2px 0 #6ea8ff}
+            #tm-statusy a.tm-item.tm-over-bottom{box-shadow:inset 0 -2px 0 #6ea8ff}
+            #tm-statusy .tm-badge{margin-left:auto;min-width:18px;text-align:center}
+            #tm-statusy .tm-badge.tm-stale{opacity:.5}
+            #tm-statusy .tm-badge.tm-err{background:rgba(255,80,80,.35)!important}
+            #tm-statusy .tm-empty{font-size:12px;opacity:.6;padding:4px 8px;cursor:pointer}
+            #tm-statusy .--title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+            #tm-statusy.tm-collapsed .tm-hdr span:first-child,
+            #tm-statusy.tm-collapsed .--title,
+            #tm-statusy.tm-collapsed .tm-badge{display:none}
+            #tm-statusy.tm-collapsed .tm-hdr{justify-content:center;padding-left:0;padding-right:0}
+            #tm-statusy.tm-collapsed .tm-gear{margin-left:0}
+
+            .tm-ov{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2147483000;display:flex;align-items:center;justify-content:center;font-family:inherit}
+            .tm-md{background:#fff;color:#1f1f22;border-radius:10px;width:380px;max-width:calc(100vw - 32px);max-height:calc(100vh - 64px);display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.3);font-size:13px}
+            .tm-md-h{display:flex;align-items:center;padding:14px 16px 8px;font-size:15px;font-weight:600}
+            .tm-md-h .tm-x{margin-left:auto;cursor:pointer;font-size:20px;opacity:.6}
+            .tm-md-h .tm-x:hover{opacity:1}
+            .tm-md input.tm-search{margin:0 16px 8px;padding:7px 10px;border:1px solid #d6d6db;border-radius:6px;font:inherit}
+            .tm-md input.tm-key{padding:6px 8px;border:1px solid #d6d6db;border-radius:6px;font:inherit;-webkit-text-security:disc;text-security:disc}
+            .tm-md-list{overflow:auto;padding:0 16px;flex:1;min-height:120px}
+            .tm-md-list label{display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer}
+            .tm-md-list label.tm-sub{padding-left:22px;color:#555}
+            .tm-md-list label code{margin-left:auto;font-size:11px;color:#999}
+            .tm-md-f{border-top:1px solid #eee;padding:10px 16px 14px;display:flex;flex-direction:column;gap:10px}
+            .tm-row{display:flex;align-items:center;gap:8px}
+            .tm-row select{margin-left:auto;padding:5px 8px;border:1px solid #d6d6db;border-radius:6px;font:inherit;max-width:200px}
+            .tm-hint{font-size:11px;color:#888}
+            .tm-btn{padding:7px 12px;border:1px solid #cfcfd6;border-radius:6px;background:#fff;cursor:pointer;font:inherit}
+            .tm-btn:hover{background:#f3f3f6}
+            .tm-btn.tm-primary{background:#1f1f22;color:#fff;border-color:#1f1f22}
+            .tm-btn.tm-primary:hover{background:#3a3a40}
+          `);
+
+          // ---------- data ----------
+          async function fetchStatuses(force) {
+            if (!force && statuses && Date.now() - statuses.ts < STATUS_TTL && statuses.list.length) return statuses;
+            const html = await (await fetch('/panel/orders-search.php', { credentials: 'include' })).text();
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const sel = doc.querySelector('select[name="status"]');
+            if (!sel) throw new Error('Nie znaleziono listy statusów');
+            const list = [];
+            let parent = '';
+            for (const o of sel.options) {
+              if (!o.value) continue;
+              const raw = o.textContent.trim();
+              const sub = /^--/.test(raw) || /-\d+$/.test(o.value);
+              const name = raw.replace(/^--\s*/, '').replace(/^\*\s*/, '').trim();
+              if (!sub) parent = name;
+              list.push({ code: o.value, name, sub, parent: sub ? parent : '' });
+            }
+            const vs = doc.querySelector('select[name="view"]');
+            const views = vs ? [...vs.options].map((o) => ({ id: o.value, name: o.textContent.trim() })) : [];
+            statuses = { ts: Date.now(), list, views };
+            save('statuses', statuses);
+            return statuses;
+          }
+
+          async function fetchCountApi(apiStatus, key) {
+            const r = await fetch(API_URL, {
+              method: 'POST',
+              credentials: 'omit',
+              headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-API-KEY': key },
+              body: JSON.stringify({ params: { ordersStatuses: [].concat(apiStatus), resultsPage: 0, resultsLimit: 1 } }),
+            });
+            let j = null;
+            try { j = await r.json(); } catch (e) { /* brak JSON */ }
+            if (!r.ok && !(r.status === 404 && j && j.errors)) {
+              throw new Error('API HTTP ' + r.status + (r.status === 429 ? ' (limit zapytań)' : r.status === 401 || r.status === 403 ? ' (klucz)' : ''));
+            }
+            if (!j) throw new Error('API: pusta odpowiedź');
+            const n = parseInt(j.resultsNumberAll, 10);
+            if (isNaN(n)) {
+              const fs = j.errors && (j.errors.faultString || j.errors.faultCode);
+              // brak wyników bywa zgłaszany jako błąd "brak danych" – traktuj jako 0
+              if (j.errors && (String(j.errors.faultCode) === '2' || /no results|brak|not found|nie znaleziono/i.test(String(fs)))) return 0;
+              throw new Error('API: ' + (fs || 'brak resultsNumberAll'));
+            }
+            return n;
+          }
+
+          // Zwraca {n, src, ms, note}; przy błędzie API automatycznie liczy przez panel.
+          async function fetchCount(code) {
+            const t0 = performance.now();
+            const apiStatus = API_STATUS[code];
+            let note = '';
+            if (apiKey && code === 'wn') {
+              try {
+                const parts = await Promise.all([
+                  fetchCountApi(WN_API, apiKey),
+                  ...WN_PANEL.map((c) => fetchCountPanel(c)),
+                ]);
+                return { n: parts.reduce((s, x) => s + x, 0), src: 'API + panel (' + WN_PANEL.join(', ') + ')', ms: Math.round(performance.now() - t0) };
+              } catch (e) {
+                note = e.message || String(e);
+              }
+            } else if (apiKey && apiStatus) {
+              try {
+                const n = await fetchCountApi(apiStatus, apiKey);
+                return { n, src: 'API', ms: Math.round(performance.now() - t0) };
+              } catch (e) {
+                note = e.message || String(e);
+              }
+            }
+            const t1 = performance.now();
+            const n = await fetchCountPanel(code);
+            return { n, src: 'panel', ms: Math.round(performance.now() - t1), note };
+          }
+
+          async function fetchCountPanel(code) {
+            let body = 'action=ajax&page=1&status=' + encodeURIComponent(code);
+            if (countView) body += '&view=' + encodeURIComponent(countView);
+            const r = await fetch('/panel/ajax/orders-list-data.php', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' },
+              body,
+            });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const j = await r.json();
+            const n = parseInt(j.totalRecords, 10);
+            if (isNaN(n)) throw new Error('Brak totalRecords');
+            return n;
+          }
+
+          async function refreshCounts(codes) {
+            const todo = codes.filter((c) => !fresh[c]);
+            const useApi = (c) => !!(apiKey && viaApi(c));
+            const apiQ = todo.filter(useApi);
+            const panelQ = todo.filter((c) => !useApi(c));
+            const worker = (queue) => async () => {
+              while (queue.length) {
+                const c = queue.shift();
+                try {
+                  const res = await fetchCount(c);
+                  counts[c] = res.n;
+                  meta[c] = res;
+                  fresh[c] = true;
+                  delete errors[c];
+                  save('counts', counts);
+                } catch (e) {
+                  errors[c] = e.message || String(e);
+                }
+                updateBadge(c);
+              }
+            };
+            await Promise.all([
+              ...Array.from({ length: API_CONCURRENCY }, worker(apiQ)),
+              ...Array.from({ length: PANEL_CONCURRENCY }, worker(panelQ)),
+            ]);
+          }
+
+          // ---------- helpers ----------
+          const statusByCode = (c) => (statuses && statuses.list.find((s) => s.code === c)) || null;
+          const labelOf = (c) => { const s = statusByCode(c); return s ? s.name : c; };
+          const titleOf = (c) => { const s = statusByCode(c); return s ? (s.sub ? `${s.parent} › ${s.name}` : s.name) : c; };
+
+          function currentStatus() {
+            try {
+              const u = new URL(location.href);
+              if (!/orders-list\.php/.test(u.pathname)) return null;
+              const st = u.searchParams.get('status');
+              if (st !== null) return st;
+              const f = document.querySelector('iframe[src*="orders-list.php"]');
+              if (f) return new URL(f.src, location.href).searchParams.get('status');
+            } catch (e) { /* ignore */ }
+            return null;
+          }
+
+          function navClasses(nav) {
+            const btns = [...nav.querySelectorAll('button')];
+            const freq = {};
+            btns.forEach((b) => { freq[b.className] = (freq[b.className] || 0) + 1; });
+            const sorted = Object.keys(freq).sort((a, b) => freq[b] - freq[a]);
+            const item = sorted[0] || '';
+            // aktywny = klasa z tym samym prefiksem sc-*, ale inna
+            const prefix = item.split(' ')[0];
+            const active = sorted.find((c) => c !== item && c.split(' ')[0] === prefix) || item;
+            const icon = (nav.querySelector('.--icon') || {}).className || 'material-symbols-outlined --icon';
+            const hdr = (nav.querySelector(':scope > div > div:not([class*="sc-"])') || {}).className || 'p-2 text-xs leading-4 font-medium';
+            const badge = (nav.querySelector('button span.rounded-sm') || {}).className || 'rounded-sm px-1 py-0.5 text-xs font-medium';
+            return { item, active, icon, hdr, badge };
+          }
+
+          // ---------- render ----------
+          let cls = null;
+          let section = null;
+
+          function buildSection(nav) {
+            cls = navClasses(nav);
+            section = document.createElement('div');
+            section.id = 'tm-statusy';
+            section.className = 'p-2';
+            render();
+            return section;
+          }
+
+          function render() {
+            if (!section) return;
+            const active = currentStatus();
+            section.innerHTML = '';
+
+            const hdr = document.createElement('div');
+            hdr.className = cls.hdr + ' tm-hdr';
+            hdr.innerHTML = `<span>Statusy</span><span class="material-symbols-outlined notranslate tm-gear" title="Wybierz widoczne statusy">settings</span>`;
+            hdr.querySelector('.tm-gear').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openSettings(); });
+            wireSectionDrag(hdr);
+            section.appendChild(hdr);
+
+            if (!selected.length) {
+              const em = document.createElement('div');
+              em.className = 'tm-empty';
+              em.textContent = 'Wybierz statusy (zębatka)';
+              em.addEventListener('click', openSettings);
+              section.appendChild(em);
+              return;
+            }
+
+            selected.forEach((code) => {
+              const a = document.createElement('a');
+              a.className = (code === active ? cls.active : cls.item) + ' tm-item';
+              a.href = '/panel/app/orders-list.php?status=' + encodeURIComponent(code);
+              a.dataset.code = code;
+              a.draggable = true;
+              a.title = titleOf(code);
+              a.innerHTML =
+                `<span class="${cls.icon}">label</span>` +
+                `<span class="--title mr-auto"></span>` +
+                `<span class="${cls.badge} tm-badge"></span>`;
+              a.querySelector('.--title').textContent = labelOf(code);
+              const col = colorOf(code);
+              if (col) {
+                const ic = a.querySelector('.--icon');
+                ic.style.color = col;
+                ic.style.fontVariationSettings = "'FILL' 1"; // wypełniona etykieta w kolorze statusu
+              }
+              section.appendChild(a);
+              wireDrag(a);
+            });
+            selected.forEach(updateBadge);
+          }
+
+          function updateBadge(code) {
+            if (!section) return;
+            const a = section.querySelector(`a.tm-item[data-code="${CSS.escape(code)}"]`);
+            if (!a) return;
+            const b = a.querySelector('.tm-badge');
+            b.classList.remove('tm-stale', 'tm-err');
+            a.title = titleOf(code) + (counts[code] != null ? ` (${counts[code]})` : '');
+            if (errors[code] && !fresh[code]) {
+              b.textContent = counts[code] != null ? String(counts[code]) : '!';
+              b.classList.add('tm-err');
+              b.title = 'Błąd pobierania: ' + errors[code];
+            } else if (counts[code] != null) {
+              b.textContent = String(counts[code]);
+              if (!fresh[code]) b.classList.add('tm-stale');
+              const m = meta[code];
+              const info = m ? `Źródło: ${m.src}, ${m.ms} ms` + (m.note ? ` (API nie zadziałało: ${m.note})` : '') : '';
+              b.title = fresh[code] ? info : 'Ostatnia znana wartość – trwa pobieranie';
+              if (info) a.title += ' – ' + info;
+            } else {
+              b.textContent = '…';
+              b.title = 'Trwa pobieranie';
+            }
+          }
+
+          function updateActive() {
+            if (!section || !cls) return;
+            const active = currentStatus();
+            section.querySelectorAll('a.tm-item').forEach((a) => {
+              const want = (a.dataset.code === active ? cls.active : cls.item) + ' tm-item';
+              if (a.className.replace(/\s*tm-(dragging|over-top|over-bottom)/g, '') !== want) a.className = want;
+            });
+          }
+
+          // ---------- drag & drop ----------
+          let dragCode = null;
+          let justDragged = false;
+
+          function wireDrag(a) {
+            a.addEventListener('dragstart', (e) => {
+              dragCode = a.dataset.code;
+              a.classList.add('tm-dragging');
+              e.dataTransfer.effectAllowed = 'move';
+              try { e.dataTransfer.setData('text/plain', dragCode); } catch (err) { /* ignore */ }
+            });
+            a.addEventListener('dragend', () => {
+              a.classList.remove('tm-dragging');
+              clearOver();
+              dragCode = null;
+              justDragged = true;
+              setTimeout(() => { justDragged = false; }, 150);
+            });
+            a.addEventListener('dragover', (e) => {
+              if (!dragCode) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+              clearOver();
+              if (a.dataset.code === dragCode) return;
+              const r = a.getBoundingClientRect();
+              a.classList.add(e.clientY < r.top + r.height / 2 ? 'tm-over-top' : 'tm-over-bottom');
+            });
+            a.addEventListener('drop', (e) => {
+              if (!dragCode) return;
+              e.preventDefault();
+              const target = a.dataset.code;
+              if (target === dragCode) return;
+              const r = a.getBoundingClientRect();
+              const after = e.clientY >= r.top + r.height / 2;
+              const list = selected.filter((c) => c !== dragCode);
+              let idx = list.indexOf(target);
+              if (after) idx++;
+              list.splice(idx, 0, dragCode);
+              selected = list;
+              save('selected', selected);
+              render();
+            });
+            a.addEventListener('click', (e) => { if (justDragged) e.preventDefault(); });
+          }
+
+          function clearOver() {
+            section && section.querySelectorAll('.tm-over-top,.tm-over-bottom').forEach((x) => x.classList.remove('tm-over-top', 'tm-over-bottom'));
+          }
+
+          // ---------- settings modal ----------
+          async function openSettings() {
+            const ov = document.createElement('div');
+            ov.className = 'tm-ov';
+            ov.innerHTML = `
+              <div class="tm-md" role="dialog" aria-label="Widoczne statusy">
+                <div class="tm-md-h">Widoczne statusy<span class="material-symbols-outlined notranslate tm-x" title="Zamknij">close</span></div>
+                <input type="search" class="tm-search" name="tm-status-filter" autocomplete="off" data-lpignore="true" data-1p-ignore placeholder="Szukaj statusu">
+                <div class="tm-md-list">Ładowanie statusów…</div>
+                <div class="tm-md-f">
+                  <div class="tm-row"><span>Widok do liczenia</span><select class="tm-view"><option value="">Domyślny (Twój bieżący)</option></select></div>
+                  <div class="tm-hint">Widok z mniejszą liczbą kolumn = szybsze liczniki. Nie zmienia widoku listy zamówień.</div>
+                  <div class="tm-row"><span>Klucz API</span><input type="text" class="tm-key" name="tm-idosell-api-key" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other" placeholder="opcjonalny" style="margin:0 0 0 auto;flex:1;max-width:200px"></div>
+                  <div class="tm-row"><button class="tm-btn tm-check" type="button">Sprawdź klucz</button><span class="tm-hint tm-check-out" style="margin-left:4px"></span></div>
+                  <div class="tm-hint">Z kluczem statusy główne liczą się przez Admin API – dużo szybciej. Użyj osobnego klucza tylko z odczytem zamówień. Klucz jest zapisany w Tampermonkey i wysyłany wyłącznie do API tego sklepu.</div>
+                  <div class="tm-row">
+                    <button class="tm-btn tm-reload" type="button">Odśwież listę statusów</button>
+                    <button class="tm-btn tm-primary tm-save" type="button" style="margin-left:auto">Zapisz</button>
+                  </div>
+                </div>
+              </div>`;
+            document.body.appendChild(ov);
+            const close = () => { ov.remove(); document.removeEventListener('keydown', onKey, true); };
+            const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+            document.addEventListener('keydown', onKey, true);
+            ov.addEventListener('mousedown', (e) => { if (e.target === ov) close(); });
+            ov.querySelector('.tm-x').addEventListener('click', close);
+
+            const listEl = ov.querySelector('.tm-md-list');
+            const search = ov.querySelector('.tm-search');
+            const viewSel = ov.querySelector('.tm-view');
+            const keyIn = ov.querySelector('.tm-key');
+            const checkOut = ov.querySelector('.tm-check-out');
+            keyIn.value = apiKey;
+            ov.querySelector('.tm-check').addEventListener('click', async () => {
+              const k = keyIn.value.trim();
+              if (!k) { checkOut.textContent = 'Wpisz klucz'; return; }
+              checkOut.textContent = 'Sprawdzam…';
+              const t0 = performance.now();
+              try {
+                const n = await fetchCountApi('new', k);
+                checkOut.textContent = `OK – nieobsłużone: ${n}, ${Math.round(performance.now() - t0)} ms`;
+              } catch (e) {
+                checkOut.textContent = 'Błąd: ' + (e.message || e);
+              }
+            });
+            let checked = new Set(selected);
+
+            const fill = () => {
+              listEl.innerHTML = '';
+              statuses.list.forEach((s) => {
+                const l = document.createElement('label');
+                if (s.sub) l.className = 'tm-sub';
+                l.dataset.q = (s.name + ' ' + s.parent + ' ' + s.code).toLowerCase();
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = checked.has(s.code);
+                cb.addEventListener('change', () => { cb.checked ? checked.add(s.code) : checked.delete(s.code); });
+                const t = document.createElement('span');
+                t.textContent = s.name;
+                const c = document.createElement('code');
+                c.textContent = s.code;
+                l.append(cb, t, c);
+                listEl.appendChild(l);
+              });
+              viewSel.length = 1;
+              (statuses.views || []).forEach((v) => {
+                const o = document.createElement('option');
+                o.value = v.id; o.textContent = v.name;
+                viewSel.appendChild(o);
+              });
+              viewSel.value = countView || '';
+              applyFilter();
+            };
+            const applyFilter = () => {
+              const q = search.value.trim().toLowerCase();
+              listEl.querySelectorAll('label').forEach((l) => { l.style.display = !q || l.dataset.q.includes(q) ? '' : 'none'; });
+            };
+            search.addEventListener('input', applyFilter);
+
+            ov.querySelector('.tm-reload').addEventListener('click', async () => {
+              listEl.textContent = 'Ładowanie statusów…';
+              try { await fetchStatuses(true); fill(); render(); } catch (e) { listEl.textContent = 'Nie udało się pobrać statusów: ' + e.message; }
+            });
+
+            ov.querySelector('.tm-save').addEventListener('click', () => {
+              // zachowaj dotychczasową kolejność, nowe dopisz na końcu w kolejności IdoSell
+              const order = statuses.list.map((s) => s.code);
+              const kept = selected.filter((c) => checked.has(c));
+              const added = order.filter((c) => checked.has(c) && !kept.includes(c));
+              selected = kept.concat(added);
+              save('selected', selected);
+              const newView = viewSel.value;
+              if (newView !== countView) {
+                countView = newView;
+                save('view', countView);
+              }
+              const newKey = keyIn.value.trim();
+              if (newKey !== apiKey) {
+                apiKey = newKey;
+                save('apiKey', apiKey);
+                Object.keys(fresh).forEach((c) => { if (viaApi(c)) delete fresh[c]; }); // przelicz przez nowe źródło
+              }
+              close();
+              render();
+              refreshCounts(selected); // tylko statusy, które nie zostały jeszcze pobrane w tym załadowaniu
+            });
+
+            try { await fetchStatuses(false); fill(); search.focus(); } catch (e) { listEl.textContent = 'Nie udało się pobrać statusów: ' + e.message; }
+          }
+
+          // ---------- położenie sekcji (przeciąganie nagłówka) ----------
+          // sectionPos = indeks natywnej sekcji, przed którą stoi „Statusy”:
+          // 1 = przed „Kanały sprzedaży”, 2 = przed „Aplikacje”, 3 = przed „Ustawienia” (pod „Aplikacje”).
+          let sectionPos = load('sectionPos', null);
+          let sectionDragging = false;
+          let dropIdx = null;
+          let dropLine = null;
+
+          const natives = (nav) => [...nav.children].filter((d) => d !== section);
+          function maxPos(nat) {
+            const b = nat.findIndex((d) => d.classList.contains('mt-auto'));
+            return b >= 0 ? b : nat.length;
+          }
+          function placeSection(nav) {
+            const nat = natives(nav);
+            const max = maxPos(nat);
+            let idx = sectionPos;
+            if (idx == null) {
+              const apps = nat.findIndex((d) => /^\s*Aplikacje\s*$/.test((d.firstElementChild || {}).textContent || ''));
+              idx = apps >= 0 ? apps : max - 1;
+            }
+            idx = Math.min(Math.max(1, idx), max);
+            const ref = nat[idx] || null;
+            if (section.parentElement !== nav || section.nextElementSibling !== ref) nav.insertBefore(section, ref);
+          }
+
+          function showLine(y, nav) {
+            if (!dropLine) {
+              dropLine = document.createElement('div');
+              dropLine.style.cssText = 'position:fixed;height:2px;background:#6ea8ff;border-radius:1px;z-index:2147483000;pointer-events:none';
+              document.body.appendChild(dropLine);
+            }
+            const r = nav.getBoundingClientRect();
+            dropLine.style.left = r.left + 8 + 'px';
+            dropLine.style.width = r.width - 16 + 'px';
+            dropLine.style.top = y - 1 + 'px';
+            dropLine.style.display = 'block';
+          }
+          function hideLine() { if (dropLine) dropLine.style.display = 'none'; }
+
+          const wiredNavs = new WeakSet();
+          function wireNav(nav) {
+            if (wiredNavs.has(nav)) return;
+            wiredNavs.add(nav);
+            nav.addEventListener('dragover', (e) => {
+              if (!sectionDragging) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+              const nat = natives(nav);
+              const max = maxPos(nat);
+              let best = null;
+              let bestY = 0;
+              for (let i = 1; i <= max; i++) {
+                // ostatnie miejsce (przed „Ustawienia”, które jest przyklejone do dołu) = tuż pod poprzednią sekcją
+                const y = i < max && nat[i] ? nat[i].getBoundingClientRect().top : nat[i - 1].getBoundingClientRect().bottom;
+                if (best === null || Math.abs(e.clientY - y) < Math.abs(e.clientY - bestY)) { best = i; bestY = y; }
+              }
+              dropIdx = best;
+              showLine(bestY, nav);
+            });
+            nav.addEventListener('drop', (e) => {
+              if (!sectionDragging) return;
+              e.preventDefault();
+              if (dropIdx != null) {
+                sectionPos = dropIdx;
+                save('sectionPos', sectionPos);
+                placeSection(nav);
+              }
+              hideLine();
+            });
+          }
+
+          function wireSectionDrag(hdr) {
+            hdr.draggable = true;
+            hdr.title = 'Przeciągnij, aby przenieść sekcję';
+            hdr.addEventListener('dragstart', (e) => {
+              if (dragCode) return;
+              sectionDragging = true;
+              dropIdx = null;
+              section.classList.add('tm-section-dragging');
+              e.dataTransfer.effectAllowed = 'move';
+              try { e.dataTransfer.setData('text/plain', 'tm-statusy'); } catch (err) { /* ignore */ }
+            });
+            hdr.addEventListener('dragend', () => {
+              sectionDragging = false;
+              section.classList.remove('tm-section-dragging');
+              hideLine();
+            });
+          }
+
+          // ---------- mount ----------
+          function mount() {
+            const nav = document.getElementById('Nav');
+            if (!nav) return;
+            if (section && nav.contains(section)) return;
+            if (!(section && cls)) buildSection(nav);
+            wireNav(nav);
+            placeSection(nav);
+            if (!fetchStarted) {
+              fetchStarted = true;
+              fetchStatuses(false).then(render).catch(() => {}).finally(() => refreshCounts(selected));
+            }
+          }
+
+          // Zwinięty pasek: React usuwa teksty nagłówków i etykiet w natywnych sekcjach
+          function syncCollapsed() {
+            const nav = document.getElementById('Nav');
+            if (!nav || !section) return;
+            const collapsed = !nav.querySelector(':scope > div:not(#tm-statusy) .--title');
+            section.classList.toggle('tm-collapsed', collapsed);
+          }
+
+          let lastHref = '';
+          const tick = () => {
+            mount();
+            syncCollapsed();
+            if (location.href !== lastHref) { lastHref = location.href; updateActive(); }
+          };
+          new MutationObserver(() => { tick(); }).observe(document.body, { childList: true, subtree: true });
+          setInterval(() => { updateActive(); }, 1500);
+          tick();
+        })();
+        };
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', tmStatusyStart, { once: true });
+        } else {
+            tmStatusyStart();
+        }
     }
 
 })();
