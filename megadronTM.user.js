@@ -2068,8 +2068,9 @@ if (url.includes('megadron.pl/pl/products')) {
                 btn.id = SCC_BTN_ID;
                 btn.target = '_blank';
                 btn.rel = 'noopener';
-                btn.style.cssText = 'position:fixed; bottom:16px; z-index:9999; padding:10px 16px; background:#ff5a00; color:#fff;'
-                    + ' font-size:14px; font-weight:700; border-radius:6px; text-decoration:none; box-shadow:0 2px 6px rgba(0,0,0,.3);';
+                btn.style.cssText = 'position:fixed; bottom:16px; z-index:9999; padding:6px 12px; background:#ff5a00; color:#fff;'
+                    + ' font-family:inherit; font-size:12px; font-weight:600; letter-spacing:.5px; line-height:1.4;'
+                    + ' border-radius:4px; text-decoration:none; box-shadow:0 2px 6px rgba(0,0,0,.3);';
                 btn.onmouseenter = function () { btn.style.background = '#e64e00'; };
                 btn.onmouseleave = function () { btn.style.background = '#ff5a00'; };
                 document.body.appendChild(btn);
@@ -2077,12 +2078,12 @@ if (url.includes('megadron.pl/pl/products')) {
 
             const href = sccChatUrl(login, orderId);
             if (btn.getAttribute('href') !== href) btn.setAttribute('href', href);
-            btn.textContent = '💬 Czat z ' + login;
-            btn.title = 'Otwórz rozmowę z kupującym ' + login;
+            btn.textContent = 'CZAT KLIENTA';
+            btn.title = 'Otwórz rozmowę';
             btn.style.left = sccLeftOffset() + 'px';
         }
 
-        // Formularz „Nowa wiadomość” – wpisz login i numer zamówienia (nic nie wysyła)
+        // Formularz „Nowa wiadomość"
         const sccNativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
         let sccFilledFor = null;
 
