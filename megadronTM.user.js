@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.9
+// @version      1.2.10
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
