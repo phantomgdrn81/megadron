@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.8
+// @version      1.2.9
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
 // @match        https://megadron.pl/pl/products/*
+// @match        https://salescenter.allegro.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @grant        GM_getValue
@@ -2012,6 +2013,118 @@ if (url.includes('megadron.pl/pl/products')) {
             document.addEventListener('DOMContentLoaded', tmStatusyStart, { once: true });
         } else {
             tmStatusyStart();
+        }
+    }
+
+
+    // ════════════════════════════════════════════════════════════════════════
+    // ALLEGRO SALES CENTER – CZAT Z KUPUJĄCYM (guzik w lewym dolnym rogu)
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (location.hostname === 'salescenter.allegro.com' && window.self === window.top) {
+
+        const SCC_BTN_ID = 'tm-czat-kupujacy-btn';
+
+        function sccOrderId() {
+            const m = location.pathname.match(/^\/orders\/([0-9a-f-]{36})/i);
+            return m ? m[1] : null;
+        }
+
+        function sccBuyerLogin() {
+            const a = document.querySelector('.buyer-details a[href*="/uzytkownik/"]');
+            const m = a && (a.getAttribute('href') || '').match(/\/uzytkownik\/([^/?#]+)/);
+            return m ? decodeURIComponent(m[1]) : null;
+        }
+
+        function sccChatUrl(login, orderId) {
+            const p = new URLSearchParams({ interlocutorLogin: login, threadStatus: 'ALL', tab: 'selling', tmOrder: orderId });
+            return '/message-center/messages?' + p.toString();
+        }
+
+        function sccLeftOffset() {
+            // lewy pionowy pasek menu Sales Center – guzik stoi tuż obok niego
+            let right = 0;
+            document.querySelectorAll('header, nav, aside').forEach(function (el) {
+                const r = el.getBoundingClientRect();
+                if (r.left < 5 && r.width > 0 && r.width < 400 && r.height > window.innerHeight * 0.6) {
+                    right = Math.max(right, Math.round(r.right));
+                }
+            });
+            return right + 16;
+        }
+
+        function sccUpdateButton() {
+            const orderId = sccOrderId();
+            const login = orderId ? sccBuyerLogin() : null;
+            let btn = document.getElementById(SCC_BTN_ID);
+
+            if (!orderId || !login) {
+                if (btn) btn.remove();
+                return;
+            }
+
+            if (!btn) {
+                btn = document.createElement('a');
+                btn.id = SCC_BTN_ID;
+                btn.target = '_blank';
+                btn.rel = 'noopener';
+                btn.style.cssText = 'position:fixed; bottom:16px; z-index:9999; padding:10px 16px; background:#ff5a00; color:#fff;'
+                    + ' font-size:14px; font-weight:700; border-radius:6px; text-decoration:none; box-shadow:0 2px 6px rgba(0,0,0,.3);';
+                btn.onmouseenter = function () { btn.style.background = '#e64e00'; };
+                btn.onmouseleave = function () { btn.style.background = '#ff5a00'; };
+                document.body.appendChild(btn);
+            }
+
+            const href = sccChatUrl(login, orderId);
+            if (btn.getAttribute('href') !== href) btn.setAttribute('href', href);
+            btn.textContent = '💬 Czat z ' + login;
+            btn.title = 'Otwórz rozmowę z kupującym ' + login;
+            btn.style.left = sccLeftOffset() + 'px';
+        }
+
+        // Formularz „Nowa wiadomość” – wpisz login i numer zamówienia (nic nie wysyła)
+        const sccNativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+        let sccFilledFor = null;
+
+        function sccFillInput(input, value) {
+            if (!input || input.value || !value) return;
+            sccNativeSetter.call(input, value);
+            ['input', 'change', 'blur', 'focusout'].forEach(function (ev) {
+                input.dispatchEvent(new Event(ev, { bubbles: true }));
+            });
+        }
+
+        function sccPrefillNewMessage() {
+            if (!location.pathname.startsWith('/message-center/messages/new-message')) return;
+            const p = new URLSearchParams(location.search);
+            const login = p.get('interlocutorLogin');
+            const order = p.get('tmOrder');
+            if (!login || !order || sccFilledFor === login + '|' + order) return;
+            const rec = document.getElementById('recipient');
+            const ord = document.getElementById('order');
+            if (!rec || !ord) return;
+            sccFillInput(rec, login);
+            sccFillInput(ord, order);
+            sccFilledFor = login + '|' + order;
+        }
+
+        const sccStart = function () {
+            let scheduled = false;
+            const run = function () {
+                scheduled = false;
+                sccUpdateButton();
+                sccPrefillNewMessage();
+            };
+            new MutationObserver(function () {
+                if (!scheduled) { scheduled = true; requestAnimationFrame(run); }
+            }).observe(document.body, { childList: true, subtree: true });
+            window.addEventListener('resize', run);
+            run();
+        };
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', sccStart, { once: true });
+        } else {
+            sccStart();
         }
     }
 
