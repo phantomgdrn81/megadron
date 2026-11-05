@@ -1450,6 +1450,14 @@ if (url.includes('megadron.pl/pl/products')) {
 
           let statuses = load('statuses', null);      // {ts, list:[{code,name,sub,parent}], views:[{id,name}]}
           let selected = load('selected', DEFAULT_SELECTED);
+          // jednorazowo dodaj „Gotowe do odbioru” pod „Gotowe”
+          if (!load('addedPOdb', false) && !selected.includes('p_odb')) {
+            const i = selected.indexOf('p');
+            selected = selected.slice();
+            selected.splice(i >= 0 ? i + 1 : selected.length, 0, 'p_odb');
+            save('selected', selected);
+          }
+          save('addedPOdb', true);
           let counts = load('counts', {});            // {code: n}
           let countView = load('view', '');            // '' = domyślny widok użytkownika
           let apiKey = load('apiKey', '');             // klucz Admin API (opcjonalny, wpisuje użytkownik)
