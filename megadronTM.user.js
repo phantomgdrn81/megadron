@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.10
+// @version      1.2.11
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1416,7 +1416,22 @@ if (url.includes('megadron.pl/pl/products')) {
           // Statusy z odpowiednikiem w API liczone jednym zapytaniem, reszta (zwykle kilka zamówień) przez panel.
           const WN_API = ['new', 'on_order', 'packed', 'ready', 'payment_waiting', 'delivery_waiting', 'suspended'];
           const WN_PANEL = ['br', 'wp', 'wd', 'wr'];
-          const viaApi = (code) => !!(API_STATUS[code] || code === 'wn');
+          // Pozycje z własnym linkiem i filtrem (licznik liczony przez panel z tymi samymi filtrami, bez operatora).
+          const CUSTOM = {
+            p: {
+              name: 'Gotowe do wysłania',
+              href: '/panel/app/orders-list.php?operator=margal&status=p&omit_personal_collection=y#p1d1v76',
+              query: { status: 'p', omit_personal_collection: 'y' },
+            },
+            p_odb: {
+              name: 'Gotowe do odbioru',
+              href: '/panel/app/orders-list.php?operator=damian&status=po&delivery=0&selling=1',
+              query: { status: 'po', delivery: '0', selling: '1' },
+              color: 'p',
+              urlStatus: 'po',
+            },
+          };
+          const viaApi = (code) => !CUSTOM[code] && !!(API_STATUS[code] || code === 'wn');
 
           // Kolory statusów: panel definiuje zmienne CSS --color-status-<nazwa> (te same co na liście zamówień).
           const COLOR_NAME = {
@@ -1426,6 +1441,7 @@ if (url.includes('megadron.pl/pl/products')) {
             wd: 'wait_for_dispatch', wp: 'wait_for_packaging', wr: 'wait_for_receive',
           };
           function colorOf(code) {
+            if (CUSTOM[code] && CUSTOM[code].color) code = CUSTOM[code].color;
             const name = COLOR_NAME[code.split('-')[0]]; // podstatus dziedziczy kolor statusu nadrzędnego
             if (!name) return null;
             const v = getComputedStyle(document.documentElement).getPropertyValue('--color-status-' + name).trim();
@@ -1434,6 +1450,14 @@ if (url.includes('megadron.pl/pl/products')) {
 
           let statuses = load('statuses', null);      // {ts, list:[{code,name,sub,parent}], views:[{id,name}]}
           let selected = load('selected', DEFAULT_SELECTED);
+          // jednorazowo dodaj „Gotowe do odbioru” pod „Gotowe”
+          if (!load('addedPOdb', false) && !selected.includes('p_odb')) {
+            const i = selected.indexOf('p');
+            selected = selected.slice();
+            selected.splice(i >= 0 ? i + 1 : selected.length, 0, 'p_odb');
+            save('selected', selected);
+          }
+          save('addedPOdb', true);
           let counts = load('counts', {});            // {code: n}
           let countView = load('view', '');            // '' = domyślny widok użytkownika
           let apiKey = load('apiKey', '');             // klucz Admin API (opcjonalny, wpisuje użytkownik)
@@ -1535,7 +1559,7 @@ if (url.includes('megadron.pl/pl/products')) {
           // Zwraca {n, src, ms, note}; przy błędzie API automatycznie liczy przez panel.
           async function fetchCount(code) {
             const t0 = performance.now();
-            const apiStatus = API_STATUS[code];
+            const apiStatus = CUSTOM[code] ? null : API_STATUS[code];
             let note = '';
             if (apiKey && code === 'wn') {
               try {
@@ -1561,7 +1585,8 @@ if (url.includes('megadron.pl/pl/products')) {
           }
 
           async function fetchCountPanel(code) {
-            let body = 'action=ajax&page=1&status=' + encodeURIComponent(code);
+            const q = CUSTOM[code] ? CUSTOM[code].query : { status: code };
+            let body = 'action=ajax&page=1&' + new URLSearchParams(q).toString();
             if (countView) body += '&view=' + encodeURIComponent(countView);
             const r = await fetch('/panel/ajax/orders-list-data.php', {
               method: 'POST',
@@ -1605,17 +1630,18 @@ if (url.includes('megadron.pl/pl/products')) {
 
           // ---------- helpers ----------
           const statusByCode = (c) => (statuses && statuses.list.find((s) => s.code === c)) || null;
-          const labelOf = (c) => { const s = statusByCode(c); return s ? s.name : c; };
-          const titleOf = (c) => { const s = statusByCode(c); return s ? (s.sub ? `${s.parent} › ${s.name}` : s.name) : c; };
+          const labelOf = (c) => { if (CUSTOM[c]) return CUSTOM[c].name; const s = statusByCode(c); return s ? s.name : c; };
+          const titleOf = (c) => { if (CUSTOM[c]) return CUSTOM[c].name; const s = statusByCode(c); return s ? (s.sub ? `${s.parent} › ${s.name}` : s.name) : c; };
 
           function currentStatus() {
             try {
               const u = new URL(location.href);
               if (!/orders-list\.php/.test(u.pathname)) return null;
               const st = u.searchParams.get('status');
-              if (st !== null) return st;
               const f = document.querySelector('iframe[src*="orders-list.php"]');
-              if (f) return new URL(f.src, location.href).searchParams.get('status');
+              const v = st !== null ? st : f ? new URL(f.src, location.href).searchParams.get('status') : null;
+              const c = Object.keys(CUSTOM).find((k) => CUSTOM[k].urlStatus && CUSTOM[k].urlStatus === v);
+              return c || v;
             } catch (e) { /* ignore */ }
             return null;
           }
@@ -1672,7 +1698,7 @@ if (url.includes('megadron.pl/pl/products')) {
             selected.forEach((code) => {
               const a = document.createElement('a');
               a.className = (code === active ? cls.active : cls.item) + ' tm-item';
-              a.href = '/panel/app/orders-list.php?status=' + encodeURIComponent(code);
+              a.href = CUSTOM[code] ? CUSTOM[code].href : '/panel/app/orders-list.php?status=' + encodeURIComponent(code);
               a.dataset.code = code;
               a.draggable = true;
               a.title = titleOf(code);
@@ -1825,16 +1851,20 @@ if (url.includes('megadron.pl/pl/products')) {
 
             const fill = () => {
               listEl.innerHTML = '';
-              statuses.list.forEach((s) => {
+              const extra = Object.keys(CUSTOM)
+                .filter((c) => !statuses.list.some((s) => s.code === c))
+                .map((c) => ({ code: c, name: CUSTOM[c].name, sub: false, parent: '' }));
+              extra.concat(statuses.list).forEach((s) => {
+                const name = CUSTOM[s.code] ? CUSTOM[s.code].name : s.name;
                 const l = document.createElement('label');
                 if (s.sub) l.className = 'tm-sub';
-                l.dataset.q = (s.name + ' ' + s.parent + ' ' + s.code).toLowerCase();
+                l.dataset.q = (name + ' ' + s.parent + ' ' + s.code).toLowerCase();
                 const cb = document.createElement('input');
                 cb.type = 'checkbox';
                 cb.checked = checked.has(s.code);
                 cb.addEventListener('change', () => { cb.checked ? checked.add(s.code) : checked.delete(s.code); });
                 const t = document.createElement('span');
-                t.textContent = s.name;
+                t.textContent = name;
                 const c = document.createElement('code');
                 c.textContent = s.code;
                 l.append(cb, t, c);
@@ -1862,7 +1892,7 @@ if (url.includes('megadron.pl/pl/products')) {
 
             ov.querySelector('.tm-save').addEventListener('click', () => {
               // zachowaj dotychczasową kolejność, nowe dopisz na końcu w kolejności IdoSell
-              const order = statuses.list.map((s) => s.code);
+              const order = Object.keys(CUSTOM).concat(statuses.list.map((s) => s.code));
               const kept = selected.filter((c) => checked.has(c));
               const added = order.filter((c) => checked.has(c) && !kept.includes(c));
               selected = kept.concat(added);
