@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.14
+// @version      1.2.15
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -316,143 +316,6 @@
             return d;
         }
 
-        // ── Ostatnie przyjęcia na M1 (Admin API, jedno zbiorcze pobranie na 10 min) ──
-        const M1IN_STOCK_ID = 1;                 // id magazynu M1
-        const M1IN_TYPES = ['pz', 'pw', 'px', 'mm']; // dokumenty przychodowe
-        const M1IN_DAYS = 30;                    // okno pobierania
-        const M1IN_FRESH_DAYS = 3;               // świeżość widocznej daty
-        const M1IN_TTL = 10 * 60 * 1000;
-        const M1IN_MAX_DOCS = 60;                // bezpiecznik: max dokumentów do pobrania pozycji
-        const M1IN_CACHE = 'm1inCache2';
-        const M1IN_DEBUG = (() => { try { return localStorage.mgd_m1in_debug === '1'; } catch (e) { return false; } })();
-        const m1inLog = (...a) => { if (M1IN_DEBUG) console.log('[M1 przyjęcia]', ...a.map((x) => (x && typeof x === 'object' && !(x instanceof Error)) ? JSON.stringify(x).slice(0, 1500) : x)); };
-        const m1inKey = () => { try { const v = GM_getValue(location.host + ':apiKey'); return v ? JSON.parse(v) : ''; } catch (e) { return ''; } };
-        const m1inPad = (n) => String(n).padStart(2, '0');
-        const m1inFmt = (d) => d.getFullYear() + '-' + m1inPad(d.getMonth() + 1) + '-' + m1inPad(d.getDate()) + ' ' + m1inPad(d.getHours()) + ':' + m1inPad(d.getMinutes()) + ':' + m1inPad(d.getSeconds());
-        const m1inTime = (s) => new Date(String(s).replace(' ', 'T')).getTime();
-
-        function m1inGet(path, params, key) {
-            const qs = new URLSearchParams(params).toString();
-            return new Promise((res, rej) => GM_xmlhttpRequest({
-                method: 'GET',
-                url: 'https://client6220.idosell.com/api/admin/v8/wms/stocksdocuments/' + path + '?' + qs,
-                headers: { 'Accept': 'application/json', 'X-API-KEY': key },
-                onload: (r) => {
-                    let j = null; try { j = JSON.parse(r.responseText); } catch (e) { /* */ }
-                    m1inLog(path, params, r.status, j);
-                    if (r.status === 404 && j) return res(j); // brak wyników
-                    if (r.status === 401 || r.status === 403) return rej(Object.assign(new Error('API ' + path + ' HTTP ' + r.status + ' – klucz nie ma dostępu do WMS (dokumenty magazynowe)'), { short: 'brak dostępu API (WMS)' }));
-                    if (r.status === 429) return rej(Object.assign(new Error('API ' + path + ' HTTP 429 – za dużo zapytań'), { short: 'limit API, spróbuj za chwilę' }));
-                    if (r.status >= 400 || !j) return rej(new Error('API ' + path + ' HTTP ' + r.status));
-                    res(j);
-                },
-                onerror: () => rej(new Error('API ' + path + ': błąd sieci')),
-            }));
-        }
-
-        const m1inPick = (o, keys) => { for (const k of keys) if (o && o[k] != null && o[k] !== '') return o[k]; return null; };
-        const m1inList = (j) => (j && j.stocksDocuments) || [];
-
-        // Pola wg dokumentacji Admin API v8 (wms/stocksdocuments/documents GET):
-        // stockId = magazyn dokumentu (dla MM: docelowy), stockSourceId = magazyn źródłowy MM.
-        async function m1inBuild(key) {
-            const end = new Date(), begin = new Date(Date.now() - M1IN_DAYS * 864e5);
-            const minTs = begin.getTime();
-            const docs = [];
-            for (const type of M1IN_TYPES) {
-                for (let page = 0; page < 5; page++) {
-                    const params = {
-                        stockDocumentType: type,
-                        'dateRange[dateType]': 'stockOperation',
-                        'dateRange[dateBegin]': m1inFmt(begin), 'dateRange[dateEnd]': m1inFmt(end),
-                        resultsPage: page, resultsLimit: 100,
-                    };
-                    if (type !== 'mm') params.stockDocumentStatus = 'close'; // MM przyjęte bywa „close_delivered”
-                    const j = await m1inGet('documents', params, key);
-                    const list = m1inList(j);
-                    list.forEach((d) => {
-                        const st = String(d.stockDocumentStatus || '');
-                        if (st !== 'close' && st !== 'close_delivered') return;
-                        if (Number(d.stockId) !== M1IN_STOCK_ID) return;
-                        if (type === 'mm' && Number(d.stockSourceId) === M1IN_STOCK_ID) return; // wyjście z M1
-                        const date = d.stockOperationDate || d.closeDate || d.modificationDate || d.openDate;
-                        if (!date || !(m1inTime(date) >= minTs)) return; // gdyby API zignorowało filtr dat
-                        docs.push({ type, id: d.stockDocumentId, date });
-                    });
-                    const pages = parseInt(j && j.resultsNumberPage, 10);
-                    if (!list.length || isNaN(pages) || page + 1 >= pages) break;
-                }
-            }
-            docs.sort((a, b) => String(b.date).localeCompare(String(a.date)));
-            if (docs.length > M1IN_MAX_DOCS) docs.length = M1IN_MAX_DOCS;
-            m1inLog('dokumenty na M1', docs.length, docs.slice(0, 10));
-            const map = {};
-            let i = 0;
-            const worker = async () => {
-                while (i < docs.length) {
-                    const d = docs[i++];
-                    try {
-                        for (let page = 0; page < 20; page++) {
-                            const j = await m1inGet('products', { type: d.type, id: d.id, results_page: page, results_limit: 100 }, key);
-                            (j.products || []).forEach((p) => {
-                                const idt = String(p.product == null ? '' : p.product);
-                                const qty = parseFloat(p.quantity);
-                                if (!idt || isNaN(qty) || qty <= 0) return;
-                                (map[idt] = map[idt] || []).push({ date: d.date, qty, type: d.type.toUpperCase() });
-                            });
-                            const pages = parseInt(j.results_number_page, 10);
-                            if (!(j.products || []).length || isNaN(pages) || page + 1 >= pages) break;
-                        }
-                    } catch (e) { m1inLog(e); }
-                }
-            };
-            await Promise.all([worker(), worker(), worker()]);
-            Object.keys(map).forEach((k) => {
-                const agg = {};
-                map[k].forEach((r) => { const kk = r.date + r.type; agg[kk] = agg[kk] ? (agg[kk].qty += r.qty, agg[kk]) : r; });
-                map[k] = Object.values(agg).sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 3);
-            });
-            return map;
-        }
-
-        let m1inPromise = null;
-        function getM1Receipts() {
-            if (m1inPromise) return m1inPromise;
-            const key = m1inKey();
-            if (!key) return (m1inPromise = Promise.reject(new Error('Brak klucza Admin API (ustaw w ⚙ sekcji Statusy)')));
-            try {
-                const c = JSON.parse(GM_getValue(M1IN_CACHE) || 'null');
-                if (c && Date.now() - c.ts < M1IN_TTL) return (m1inPromise = Promise.resolve(c.map));
-            } catch (e) { /* */ }
-            m1inPromise = m1inBuild(key).then((map) => {
-                GM_setValue(M1IN_CACHE, JSON.stringify({ ts: Date.now(), map }));
-                return map;
-            });
-            return m1inPromise;
-        }
-
-        function makeBadgeM1In(idt) {
-            const s = document.createElement('span');
-            s.className = 'm1-in-badge';
-            s.style.cssText = 'margin:4px 0 0 6px;padding:2px 6px;border-radius:4px;font-size:11px;display:inline-block;vertical-align:top;cursor:pointer;background:#f1f5f9;border:1px solid #cbd5e1;color:#64748b;';
-            s.textContent = '⬇ …';
-            const ddmm = (d) => { const m = String(d).match(/(\d{4})-(\d{2})-(\d{2})/); return m ? m[3] + '.' + m[2] : String(d); };
-            const row = (r) => '⬇ +' + r.qty + ' szt. · ' + ddmm(r.date) + ' <small>(' + r.type + ')</small>';
-            getM1Receipts().then((map) => {
-                const list = map[idt] || [];
-                if (!list.length) { s.textContent = '⬇ brak przyjęć (' + M1IN_DAYS + ' dni)'; return; }
-                const fresh = (Date.now() - m1inTime(list[0].date)) <= M1IN_FRESH_DAYS * 864e5;
-                if (fresh) { s.style.background = '#ecfdf5'; s.style.borderColor = '#6ee7b7'; s.style.color = '#047857'; }
-                const head = (fresh ? row(list[0]) : '⬇') + (list.length > (fresh ? 1 : 0) ? ' ▸' : '');
-                let open = false;
-                const render = () => { s.innerHTML = open ? list.map(row).join('<br>') : head; };
-                render();
-                s.title = 'Ostatnie przyjęcia na M1 – kliknij, aby rozwinąć';
-                s.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); open = !open; render(); });
-            }).catch((e) => { s.textContent = '⬇ ' + (e.short || '—'); s.title = e.message; });
-            return s;
-        }
-
 
         function processLinksM1() {
             document.querySelectorAll('a[onclick*="showProductInfo"]').forEach(a => {
@@ -492,8 +355,6 @@
                 placeholder.innerHTML = '📦 M1: <strong>ładowanie…</strong>';
                 lokalizacjeP.insertAdjacentElement('afterend', placeholder);
 
-                const inBadge = makeBadgeM1In(idt);
-                placeholder.insertAdjacentElement('afterend', inBadge);
                 fetchM1(idt, function (m1) {
                     placeholder.replaceWith(makeBadgeM1(m1));
                 });
