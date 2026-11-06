@@ -1385,7 +1385,7 @@ if (url.includes('megadron.pl/pl/products')) {
     // STATUSY W PASKU BOCZNYM (sekcja „Statusy” z licznikami zamówień)
     // ════════════════════════════════════════════════════════════════════════
 
-    if (window.self === window.top && url.includes('/panel/')) {
+    if (window.self === window.top && url.includes('/panel/') && !url.includes('/panel/app/client-deliveryaddress.php')) {
         const tmStatusyStart = () => {
         (function () {
           'use strict';
