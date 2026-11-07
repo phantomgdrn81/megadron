@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.16
+// @version      1.2.17
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -333,6 +333,13 @@
             <path d="M16 14v15L4 23.5v-15z" fill="#b5763a"/>
             <path d="M10 5.7 22 11.2v4.3l-3 1.4v-4.3L7 7.1z" fill="#f3d3a1"/>
         </svg>`;
+        // Szary karton do wiersza "Nowy karton"
+        const BOX_SVG_GRAY = BOX_SVG.replace('#c8894a', '#d2d6db').replace('#e0a868', '#e3e6ea')
+            .replace('#b5763a', '#c3c8ce').replace('#f3d3a1', '#f1f3f5');
+        const GRIP_SVG = `<svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true" fill="#9aa1a9">
+            <circle cx="2.5" cy="3" r="1.5"/><circle cx="7.5" cy="3" r="1.5"/><circle cx="2.5" cy="8" r="1.5"/>
+            <circle cx="7.5" cy="8" r="1.5"/><circle cx="2.5" cy="13" r="1.5"/><circle cx="7.5" cy="13" r="1.5"/>
+        </svg>`;
 
         function injectStyles() {
             const css = `
@@ -351,21 +358,30 @@
             .krb-pop-h{display:flex;align-items:center;justify-content:space-between;font-size:14px;font-weight:600;color:#222;margin-bottom:10px}
             .krb-x{cursor:pointer;color:#888;font-size:18px;line-height:1;padding:0 2px}
             .krb-x:hover{color:#222}
-            .krb-tile{position:relative;display:flex;align-items:center;gap:10px;background:#e8f1fb;border:1px solid #a9c8ea;border-radius:8px;padding:9px 10px;margin-bottom:8px;cursor:pointer}
+            .krb-tile{position:relative;display:flex;align-items:center;gap:10px;background:#e8f1fb;border:1px solid #a9c8ea;border-radius:8px;padding:9px 10px 9px 6px;margin-bottom:8px;cursor:pointer}
             .krb-tile:hover{background:#d8e8f8;border-color:#5b9bd5}
+            .krb-tile .grip{flex:none;display:flex;align-items:center;padding:4px 2px;margin-right:-4px;cursor:grab;border-radius:4px;touch-action:none}
+            .krb-tile .grip:hover{background:rgba(0,0,0,.06)}
+            .krb-tile.drag{opacity:.45}
+            .krb-tile.drop-before{box-shadow:0 -3px 0 #2a6db0}
+            .krb-tile.drop-after{box-shadow:0 3px 0 #2a6db0}
             .krb-tile .nm{font-weight:600;color:#222;font-size:13px}
-            .krb-tile .dm{color:#555;font-size:11.5px}
+            .krb-tile .dm{color:#333;font-size:13px;font-weight:600;margin-top:1px}
             .krb-tile .del{position:absolute;right:8px;top:50%;transform:translateY(-50%);color:#c62828;font-size:15px;padding:2px 5px;border-radius:4px}
             .krb-tile .del:hover{background:#fbe3e3}
-            .krb-tile.sel{background:#d3e6fa;border:2px solid #2a6db0;padding:8px 9px}
-            .krb-tile .chk{color:#2a6db0;font-weight:700;font-size:14px;margin-left:auto;margin-right:30px}
+            .krb-tile.sel{background:#d3e6fa;border:2px solid #2a6db0;padding:8px 9px 8px 5px}
             .krb-main .txt{display:flex;flex-direction:column;min-width:0;white-space:nowrap}
             .krb-main .txt span{font-size:16px;font-weight:700;overflow:hidden;text-overflow:ellipsis}
-            .krb-main .txt small{font-size:12px;opacity:.8;font-weight:400;margin-top:2px}
+            .krb-main .txt small{font-size:13px;opacity:.9;font-weight:600;margin-top:2px}
+            .krb-addrow{display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #dfe3e7;border-radius:8px;padding:8px 12px;cursor:pointer;color:#555;font-size:13px;font-weight:500}
+            .krb-addrow:hover{background:#f6f7f9;border-color:#c9ced4}
+            .krb-addrow svg{flex:none;width:30px;height:30px}
+            .krb-addrow .plus{margin-left:auto;width:22px;height:22px;border:1px solid #c4c9cf;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#8a9097;font-size:16px;line-height:1}
             .krb-toast{position:fixed;top:12px;right:12px;z-index:100000;max-width:360px;padding:9px 14px;border-radius:8px;color:#fff;background:#3a3d42;font-size:13px;box-shadow:0 6px 18px rgba(0,0,0,.25)}
             .krb-toast.busy{background:#5b6068}.krb-toast.ok{background:#2e7d32}.krb-toast.err{background:#c62828}
             .krb-add{border:1px dashed #c4ccd5;border-radius:8px;padding:8px;background:#fafbfc}
-            .krb-add .lbl{color:#666;margin-bottom:6px}
+            .krb-add .lbl{display:flex;justify-content:space-between;color:#666;margin-bottom:6px}
+            .krb-add .lbl .krb-x{font-size:15px}
             .krb-add .f{display:flex;gap:4px}
             .krb-add input{min-width:0;font-size:12px;height:24px;padding:2px 5px;border:1px solid #ccd2d8;border-radius:4px}
             .krb-add input.n{flex:2}.krb-add input.d{flex:1}
@@ -548,26 +564,58 @@
         function onOutside(e) { if (pop && !pop.contains(e.target) && !e.target.closest('.krb-bar')) closePop(); }
         function onEsc(e) { if (e.key === 'Escape') closePop(); }
 
-        // ⚙: wybór kartonu (klik w kafelek), usuwanie (✕) i dodawanie nowych
+        // ⚙: wybór kartonu (klik w kafelek), kolejność (przeciąganie za uchwyt), usuwanie (✕) i dodawanie nowych
         function openPop(anchor) {
             closePop();
             pop = document.createElement('div');
             pop.className = 'krb-pop';
 
-            const render = () => {
+            const render = (adding = false) => {
                 const boxes = loadBoxes();
                 const sel = getSelected();
                 pop.innerHTML = `<div class="krb-pop-h"><span>Szablony Pakowania (Kartony)</span><span class="krb-x" title="Zamknij">×</span></div>`;
                 pop.querySelector('.krb-x').onclick = closePop;
 
+                const clearDrop = () => pop.querySelectorAll('.drop-before, .drop-after')
+                    .forEach(x => x.classList.remove('drop-before', 'drop-after'));
                 boxes.forEach((b, i) => {
                     const isSel = sel && b.name === sel.name;
                     const t = document.createElement('div');
                     t.className = 'krb-tile' + (isSel ? ' sel' : '');
-                    t.innerHTML = `${BOX_SVG}<div><div class="nm"></div><div class="dm">${b.h} × ${b.w} × ${b.l} cm</div></div>${isSel ? '<span class="chk">✓</span>' : ''}`;
+                    t.innerHTML = `<span class="grip" title="Przeciągnij, aby zmienić kolejność">${GRIP_SVG}</span>${BOX_SVG}<div><div class="nm"></div><div class="dm">${b.h} × ${b.w} × ${b.l} cm</div></div>`;
                     t.querySelector('.nm').textContent = b.name;
                     t.title = 'Kliknij, aby wybrać ten karton';
                     t.onclick = () => { setSelected(b); showSelected(); closePop(); };
+
+                    // Przeciąganie tylko za uchwyt – zwykły klik w kafelek dalej wybiera karton
+                    const grip = t.querySelector('.grip');
+                    grip.onclick = e => e.stopPropagation();
+                    grip.onpointerdown = e => {
+                        e.preventDefault();
+                        grip.setPointerCapture(e.pointerId);
+                        t.classList.add('drag');
+                        let to = i;
+                        const tiles = [...pop.querySelectorAll('.krb-tile')];
+                        grip.onpointermove = ev => {
+                            // Miejsce wstawienia: przed pierwszym kafelkiem, którego środek jest poniżej kursora
+                            to = tiles.findIndex(x => { const r = x.getBoundingClientRect(); return ev.clientY < r.top + r.height / 2; });
+                            if (to < 0) to = tiles.length;
+                            clearDrop();
+                            if (to !== i && to !== i + 1) {
+                                if (to < tiles.length) tiles[to].classList.add('drop-before');
+                                else tiles[tiles.length - 1].classList.add('drop-after');
+                            }
+                        };
+                        grip.onpointerup = grip.onpointercancel = () => {
+                            grip.onpointermove = grip.onpointerup = grip.onpointercancel = null;
+                            t.classList.remove('drag'); clearDrop();
+                            if (to === i || to === i + 1) return;
+                            const [moved] = boxes.splice(i, 1);
+                            boxes.splice(to > i ? to - 1 : to, 0, moved);
+                            saveBoxes(boxes);
+                            render(); showSelected();
+                        };
+                    };
                     const del = document.createElement('span');
                     del.className = 'del'; del.title = 'Usuń'; del.textContent = '✕';
                     del.onclick = e => {
@@ -580,9 +628,20 @@
                     pop.appendChild(t);
                 });
 
+                // Zwinięty wiersz "Nowy karton" – formularz pojawia się dopiero po kliknięciu
+                if (!adding) {
+                    const row = document.createElement('div');
+                    row.className = 'krb-addrow';
+                    row.title = 'Dodaj nowy karton';
+                    row.innerHTML = `${BOX_SVG_GRAY}<span>Nowy karton</span><span class="plus">+</span>`;
+                    row.onclick = () => render(true);
+                    pop.appendChild(row);
+                    return;
+                }
+
                 const add = document.createElement('div');
                 add.className = 'krb-add';
-                add.innerHTML = `<div class="lbl">Nowy karton (wys × szer × dł, cm)</div><div class="f"><input class="n" placeholder="nazwa" maxlength="${NAME_MAX}"><input class="d" placeholder="wys"><input class="d" placeholder="szer"><input class="d" placeholder="dł"><button type="button" title="Dodaj">+</button></div>`;
+                add.innerHTML = `<div class="lbl"><span>Nowy karton (wys × szer × dł, cm)</span><span class="krb-x" title="Anuluj">×</span></div><div class="f"><input class="n" placeholder="nazwa" maxlength="${NAME_MAX}"><input class="d" placeholder="wys"><input class="d" placeholder="szer"><input class="d" placeholder="dł"><button type="button" title="Dodaj">+</button></div>`;
                 const [n, h, w, l] = add.querySelectorAll('input');
                 const doAdd = () => {
                     const dims = [h, w, l].map(x => parseFloat(x.value.replace(',', '.')));
@@ -591,11 +650,15 @@
                     boxes.push(box); saveBoxes(boxes);
                     if (boxes.length === 1) setSelected(box);
                     render(); showSelected();
-                    pop.querySelector('.krb-add input.n').focus();
                 };
+                add.querySelector('.krb-x').onclick = () => render();
                 add.querySelector('button').onclick = doAdd;
-                add.querySelectorAll('input').forEach(x => x.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); doAdd(); } });
+                add.querySelectorAll('input').forEach(x => x.onkeydown = e => {
+                    if (e.key === 'Enter') { e.preventDefault(); doAdd(); }
+                    if (e.key === 'Escape') { e.stopPropagation(); render(); } // Esc zwija formularz, nie zamyka okna
+                });
                 pop.appendChild(add);
+                n.focus();
             };
             render();
 
