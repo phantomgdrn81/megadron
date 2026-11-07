@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.17
+// @version      1.2.18
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -358,18 +358,17 @@
             .krb-pop-h{display:flex;align-items:center;justify-content:space-between;font-size:14px;font-weight:600;color:#222;margin-bottom:10px}
             .krb-x{cursor:pointer;color:#888;font-size:18px;line-height:1;padding:0 2px}
             .krb-x:hover{color:#222}
-            .krb-tile{position:relative;display:flex;align-items:center;gap:10px;background:#e8f1fb;border:1px solid #a9c8ea;border-radius:8px;padding:9px 10px 9px 6px;margin-bottom:8px;cursor:pointer}
-            .krb-tile:hover{background:#d8e8f8;border-color:#5b9bd5}
-            .krb-tile .grip{flex:none;display:flex;align-items:center;padding:4px 2px;margin-right:-4px;cursor:grab;border-radius:4px;touch-action:none}
-            .krb-tile .grip:hover{background:rgba(0,0,0,.06)}
-            .krb-tile.drag{opacity:.45}
-            .krb-tile.drop-before{box-shadow:0 -3px 0 #2a6db0}
-            .krb-tile.drop-after{box-shadow:0 3px 0 #2a6db0}
+            .krb-tile{position:relative;display:flex;align-items:center;gap:10px;background:#fff8db;border:1px solid #f0d77a;border-radius:8px;padding:9px 10px 9px 6px;margin-bottom:8px;cursor:grab;touch-action:none;user-select:none;transition:transform .18s ease}
+            .krb-tile:hover{background:#fff1b8;border-color:#e6c000}
+            .krb-tile .grip{flex:none;display:flex;align-items:center;padding:4px 2px;margin-right:-4px}
+            .krb-tile.lift{transition:none;z-index:2;cursor:grabbing;box-shadow:0 8px 20px rgba(0,0,0,.18)}
+            .krb-tile.settle{transition:transform .15s ease;z-index:2}
+            .krb-pop.sorting{user-select:none;cursor:grabbing}
             .krb-tile .nm{font-weight:600;color:#222;font-size:13px}
             .krb-tile .dm{color:#333;font-size:13px;font-weight:600;margin-top:1px}
             .krb-tile .del{position:absolute;right:8px;top:50%;transform:translateY(-50%);color:#c62828;font-size:15px;padding:2px 5px;border-radius:4px}
             .krb-tile .del:hover{background:#fbe3e3}
-            .krb-tile.sel{background:#d3e6fa;border:2px solid #2a6db0;padding:8px 9px 8px 5px}
+            .krb-tile.sel{background:#ffec9e;border:2px solid #e0b000;padding:8px 9px 8px 5px}
             .krb-main .txt{display:flex;flex-direction:column;min-width:0;white-space:nowrap}
             .krb-main .txt span{font-size:16px;font-weight:700;overflow:hidden;text-overflow:ellipsis}
             .krb-main .txt small{font-size:13px;opacity:.9;font-weight:600;margin-top:2px}
@@ -385,7 +384,7 @@
             .krb-add .f{display:flex;gap:4px}
             .krb-add input{min-width:0;font-size:12px;height:24px;padding:2px 5px;border:1px solid #ccd2d8;border-radius:4px}
             .krb-add input.n{flex:2}.krb-add input.d{flex:1}
-            .krb-add button{flex:none;width:26px;height:24px;border:1px solid #5b9bd5;background:#e8f1fb;color:#2a6db0;border-radius:4px;cursor:pointer;font-size:15px;line-height:1}
+            .krb-add button{flex:none;width:26px;height:24px;border:1px solid #e0b000;background:#fff8db;color:#8a6d00;border-radius:4px;cursor:pointer;font-size:15px;line-height:1}
             .krb-empty{color:#777;padding:6px 2px 10px}
             `;
             const s = document.createElement('style');
@@ -564,11 +563,12 @@
         function onOutside(e) { if (pop && !pop.contains(e.target) && !e.target.closest('.krb-bar')) closePop(); }
         function onEsc(e) { if (e.key === 'Escape') closePop(); }
 
-        // ⚙: wybór kartonu (klik w kafelek), kolejność (przeciąganie za uchwyt), usuwanie (✕) i dodawanie nowych
+        // ⚙: wybór kartonu (klik w kafelek), kolejność (przeciąganie kafelka), usuwanie (✕) i dodawanie nowych
         function openPop(anchor) {
             closePop();
             pop = document.createElement('div');
             pop.className = 'krb-pop';
+            let justDragged = false;
 
             const render = (adding = false) => {
                 const boxes = loadBoxes();
@@ -576,45 +576,86 @@
                 pop.innerHTML = `<div class="krb-pop-h"><span>Szablony Pakowania (Kartony)</span><span class="krb-x" title="Zamknij">×</span></div>`;
                 pop.querySelector('.krb-x').onclick = closePop;
 
-                const clearDrop = () => pop.querySelectorAll('.drop-before, .drop-after')
-                    .forEach(x => x.classList.remove('drop-before', 'drop-after'));
                 boxes.forEach((b, i) => {
                     const isSel = sel && b.name === sel.name;
                     const t = document.createElement('div');
                     t.className = 'krb-tile' + (isSel ? ' sel' : '');
-                    t.innerHTML = `<span class="grip" title="Przeciągnij, aby zmienić kolejność">${GRIP_SVG}</span>${BOX_SVG}<div><div class="nm"></div><div class="dm">${b.h} × ${b.w} × ${b.l} cm</div></div>`;
+                    t.innerHTML = `<span class="grip">${GRIP_SVG}</span>${BOX_SVG}<div><div class="nm"></div><div class="dm">${b.h} × ${b.w} × ${b.l} cm</div></div>`;
                     t.querySelector('.nm').textContent = b.name;
-                    t.title = 'Kliknij, aby wybrać ten karton';
-                    t.onclick = () => { setSelected(b); showSelected(); closePop(); };
+                    t.title = 'Kliknij, aby wybrać ten karton · przeciągnij, aby zmienić kolejność';
+                    t.onclick = () => {
+                        if (justDragged) { justDragged = false; return; } // puszczenie po przeciągnięciu to nie wybór
+                        setSelected(b); showSelected(); closePop();
+                    };
 
-                    // Przeciąganie tylko za uchwyt – zwykły klik w kafelek dalej wybiera karton
-                    const grip = t.querySelector('.grip');
-                    grip.onclick = e => e.stopPropagation();
-                    grip.onpointerdown = e => {
-                        e.preventDefault();
-                        grip.setPointerCapture(e.pointerId);
-                        t.classList.add('drag');
-                        let to = i;
+                    // Przeciąganie całego kafelka: jedzie za kursorem, sąsiednie płynnie robią miejsce.
+                    // Dopóki ruch < 5 px, to zwykły klik (wybór kartonu).
+                    t.onpointerdown = e => {
+                        if (e.button !== 0 || e.target.closest('.del') || boxes.length < 2) return;
+                        e.preventDefault(); // bez zaznaczania tekstu; click nadal przychodzi
                         const tiles = [...pop.querySelectorAll('.krb-tile')];
-                        grip.onpointermove = ev => {
-                            // Miejsce wstawienia: przed pierwszym kafelkiem, którego środek jest poniżej kursora
-                            to = tiles.findIndex(x => { const r = x.getBoundingClientRect(); return ev.clientY < r.top + r.height / 2; });
-                            if (to < 0) to = tiles.length;
-                            clearDrop();
-                            if (to !== i && to !== i + 1) {
-                                if (to < tiles.length) tiles[to].classList.add('drop-before');
-                                else tiles[tiles.length - 1].classList.add('drop-after');
+                        const tops = tiles.map(x => x.getBoundingClientRect().top);
+                        const step = tops[1] - tops[0];
+                        const minDy = tops[0] - tops[i], maxDy = tops[tiles.length - 1] - tops[i];
+                        const y0 = e.clientY;
+                        let dragging = false, to = i;
+
+                        const place = n => tiles.forEach((x, j) => {
+                            if (j === i) return;
+                            const shift = (i < n && j > i && j <= n) ? -step : (n < i && j >= n && j < i) ? step : 0;
+                            x.style.transform = shift ? `translateY(${shift}px)` : '';
+                        });
+                        // Nasłuch na całym oknie – kursor szybko zjeżdża z kafelka (pointer capture bywa zawodny w ramce panelu)
+                        const finish = () => {
+                            window.removeEventListener('pointermove', onMove, true);
+                            window.removeEventListener('pointerup', onUp, true);
+                            window.removeEventListener('pointercancel', cancel, true);
+                            window.removeEventListener('keydown', onKey, true);
+                            pop.classList.remove('sorting');
+                        };
+                        const cancel = () => {
+                            finish();
+                            t.classList.remove('lift');
+                            tiles.forEach(x => { x.style.transform = ''; });
+                        };
+                        const onKey = ev => { if (ev.key === 'Escape' && dragging) { ev.stopPropagation(); cancel(); } };
+
+                        const onMove = ev => {
+                            const dy = ev.clientY - y0;
+                            if (!dragging) {
+                                if (Math.abs(dy) < 5) return;
+                                dragging = true;
+                                t.classList.add('lift');
+                                pop.classList.add('sorting');
+                                window.addEventListener('keydown', onKey, true);
                             }
+                            const d = Math.max(minDy, Math.min(maxDy, dy));
+                            t.style.transform = `translateY(${d}px) scale(1.02)`;
+                            const n = Math.max(0, Math.min(tiles.length - 1, Math.round(i + d / step)));
+                            if (n !== to) { to = n; place(to); }
                         };
-                        grip.onpointerup = grip.onpointercancel = () => {
-                            grip.onpointermove = grip.onpointerup = grip.onpointercancel = null;
-                            t.classList.remove('drag'); clearDrop();
-                            if (to === i || to === i + 1) return;
-                            const [moved] = boxes.splice(i, 1);
-                            boxes.splice(to > i ? to - 1 : to, 0, moved);
-                            saveBoxes(boxes);
-                            render(); showSelected();
+                        const onUp = ev => {
+                            if (!dragging && Math.abs(ev.clientY - y0) >= 5) onMove(ev); // szybki ruch bez pośrednich pozycji
+                            if (!dragging) { finish(); return; }
+                            justDragged = true;
+                            setTimeout(() => { justDragged = false; }, 0); // gdyby click nie przyszedł
+                            finish();
+                            // Dojazd do slotu, potem zapis nowej kolejności
+                            t.classList.remove('lift');
+                            t.classList.add('settle');
+                            t.style.transform = `translateY(${(to - i) * step}px)`;
+                            setTimeout(() => {
+                                if (to !== i) {
+                                    const [moved] = boxes.splice(i, 1);
+                                    boxes.splice(to, 0, moved);
+                                    saveBoxes(boxes);
+                                }
+                                render(); showSelected();
+                            }, 160);
                         };
+                        window.addEventListener('pointermove', onMove, true);
+                        window.addEventListener('pointerup', onUp, true);
+                        window.addEventListener('pointercancel', cancel, true);
                     };
                     const del = document.createElement('span');
                     del.className = 'del'; del.title = 'Usuń'; del.textContent = '✕';
@@ -1944,12 +1985,11 @@ if (url.includes('megadron.pl/pl/products')) {
             #tm-statusy.tm-section-dragging{opacity:.45}
             #tm-statusy .tm-gear{margin-left:auto;cursor:pointer;font-size:16px;line-height:1;opacity:.7;border-radius:4px;padding:2px;user-select:none}
             #tm-statusy .tm-gear:hover{opacity:1;background:rgba(255,255,255,.1)}
-            #tm-statusy a.tm-item{text-decoration:none;color:inherit;display:flex;width:100%;box-sizing:border-box}
-            #tm-statusy a.tm-item[draggable=true]{cursor:pointer}
-            #tm-statusy a.tm-item.tm-dragging{opacity:.4}
-            #tm-statusy a.tm-item.tm-over-top{box-shadow:inset 0 2px 0 #6ea8ff}
-            #tm-statusy a.tm-item.tm-over-bottom{box-shadow:inset 0 -2px 0 #6ea8ff}
-            #tm-statusy .tm-badge{margin-left:auto;min-width:18px;text-align:center}
+            #tm-statusy a.tm-item{text-decoration:none;color:inherit;display:flex;width:100%;box-sizing:border-box;touch-action:none;user-select:none;-webkit-user-drag:none;transition:transform .18s ease}
+            #tm-statusy a.tm-item.tm-lift{transition:none;position:relative;z-index:2;cursor:grabbing;background:var(--tm-lift-bg,#2c3038);border-radius:6px;box-shadow:0 6px 16px rgba(0,0,0,.35)}
+            #tm-statusy a.tm-item.tm-settle{transition:transform .15s ease;position:relative;z-index:2}
+            #tm-statusy.tm-sorting{cursor:grabbing}
+            #tm-statusy .tm-badge{margin-left:auto;flex:none;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-width:26px;padding:2px 5px;line-height:14px;font-variant-numeric:tabular-nums;text-align:center}
             #tm-statusy .tm-badge.tm-stale{opacity:.5}
             #tm-statusy .tm-badge.tm-err{background:rgba(255,80,80,.35)!important}
             #tm-statusy .tm-empty{font-size:12px;opacity:.6;padding:4px 8px;cursor:pointer}
@@ -2172,7 +2212,7 @@ if (url.includes('megadron.pl/pl/products')) {
               a.className = (code === active ? cls.active : cls.item) + ' tm-item';
               a.href = CUSTOM[code] ? CUSTOM[code].href : '/panel/app/orders-list.php?status=' + encodeURIComponent(code);
               a.dataset.code = code;
-              a.draggable = true;
+              a.draggable = false;
               a.title = titleOf(code);
               a.innerHTML =
                 `<span class="${cls.icon}">label</span>` +
@@ -2220,58 +2260,101 @@ if (url.includes('megadron.pl/pl/products')) {
             const active = currentStatus();
             section.querySelectorAll('a.tm-item').forEach((a) => {
               const want = (a.dataset.code === active ? cls.active : cls.item) + ' tm-item';
-              if (a.className.replace(/\s*tm-(dragging|over-top|over-bottom)/g, '') !== want) a.className = want;
+              if (a.className.replace(/\s*tm-(lift|settle)/g, '') !== want) a.className = want;
             });
           }
 
-          // ---------- drag & drop ----------
+          // ---------- przeciąganie: cały wiersz jedzie za kursorem, pozostałe płynnie robią miejsce ----------
+          // Dopóki ruch < 5 px, to zwykły klik (link do statusu).
           let dragCode = null;
           let justDragged = false;
 
           function wireDrag(a) {
-            a.addEventListener('dragstart', (e) => {
-              dragCode = a.dataset.code;
-              a.classList.add('tm-dragging');
-              e.dataTransfer.effectAllowed = 'move';
-              try { e.dataTransfer.setData('text/plain', dragCode); } catch (err) { /* ignore */ }
-            });
-            a.addEventListener('dragend', () => {
-              a.classList.remove('tm-dragging');
-              clearOver();
-              dragCode = null;
-              justDragged = true;
-              setTimeout(() => { justDragged = false; }, 150);
-            });
-            a.addEventListener('dragover', (e) => {
-              if (!dragCode) return;
+            a.addEventListener('pointerdown', (e) => {
+              if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
+              const items = [...section.querySelectorAll('a.tm-item')];
+              const i = items.indexOf(a);
+              if (items.length < 2 || i < 0) return;
               e.preventDefault();
-              e.dataTransfer.dropEffect = 'move';
-              clearOver();
-              if (a.dataset.code === dragCode) return;
-              const r = a.getBoundingClientRect();
-              a.classList.add(e.clientY < r.top + r.height / 2 ? 'tm-over-top' : 'tm-over-bottom');
+              const tops = items.map((x) => x.getBoundingClientRect().top);
+              const step = tops[1] - tops[0];
+              const minDy = tops[0] - tops[i];
+              const maxDy = tops[items.length - 1] - tops[i];
+              const y0 = e.clientY;
+              let dragging = false;
+              let to = i;
+
+              const place = (n) => items.forEach((x, j) => {
+                if (j === i) return;
+                const shift = (i < n && j > i && j <= n) ? -step : (n < i && j >= n && j < i) ? step : 0;
+                x.style.transform = shift ? `translateY(${shift}px)` : '';
+              });
+              const finish = () => {
+                window.removeEventListener('pointermove', onMove, true);
+                window.removeEventListener('pointerup', onUp, true);
+                window.removeEventListener('pointercancel', cancel, true);
+                window.removeEventListener('keydown', onKey, true);
+                section.classList.remove('tm-sorting');
+                dragCode = null;
+              };
+              const cancel = () => {
+                finish();
+                a.classList.remove('tm-lift');
+                items.forEach((x) => { x.style.transform = ''; });
+              };
+              const onKey = (ev) => { if (ev.key === 'Escape' && dragging) { ev.stopPropagation(); cancel(); } };
+              const onMove = (ev) => {
+                const dy = ev.clientY - y0;
+                if (!dragging) {
+                  if (Math.abs(dy) < 5) return;
+                  dragging = true;
+                  dragCode = a.dataset.code;
+                  // tło paska pod uniesionym wierszem, żeby nie prześwitywały sąsiednie
+                  for (let x = section; x; x = x.parentElement) {
+                    const bg = getComputedStyle(x).backgroundColor;
+                    if (bg && bg !== 'transparent' && !/rgba\(.*,\s*0\)$/.test(bg)) { a.style.setProperty('--tm-lift-bg', bg); break; }
+                  }
+                  a.classList.add('tm-lift');
+                  section.classList.add('tm-sorting');
+                  window.addEventListener('keydown', onKey, true);
+                }
+                const d = Math.max(minDy, Math.min(maxDy, dy));
+                a.style.transform = `translateY(${d}px)`;
+                const n = Math.max(0, Math.min(items.length - 1, Math.round(i + d / step)));
+                if (n !== to) { to = n; place(to); }
+              };
+              const onUp = (ev) => {
+                if (!dragging && Math.abs(ev.clientY - y0) >= 5) onMove(ev); // szybki ruch bez pośrednich pozycji
+                if (!dragging) { finish(); return; }
+                finish();
+                // puszczenie po przeciągnięciu nie może otworzyć linku
+                justDragged = true;
+                setTimeout(() => { justDragged = false; }, 150);
+                a.classList.remove('tm-lift');
+                a.classList.add('tm-settle');
+                a.style.transform = `translateY(${(to - i) * step}px)`;
+                setTimeout(() => {
+                  if (to !== i) {
+                    const list = selected.slice();
+                    const [moved] = list.splice(i, 1);
+                    list.splice(to, 0, moved);
+                    selected = list;
+                    save('selected', selected);
+                  }
+                  render();
+                }, 160);
+              };
+              window.addEventListener('pointermove', onMove, true);
+              window.addEventListener('pointerup', onUp, true);
+              window.addEventListener('pointercancel', cancel, true);
             });
-            a.addEventListener('drop', (e) => {
-              if (!dragCode) return;
-              e.preventDefault();
-              const target = a.dataset.code;
-              if (target === dragCode) return;
-              const r = a.getBoundingClientRect();
-              const after = e.clientY >= r.top + r.height / 2;
-              const list = selected.filter((c) => c !== dragCode);
-              let idx = list.indexOf(target);
-              if (after) idx++;
-              list.splice(idx, 0, dragCode);
-              selected = list;
-              save('selected', selected);
-              render();
-            });
-            a.addEventListener('click', (e) => { if (justDragged) e.preventDefault(); });
+            a.addEventListener('dragstart', (e) => e.preventDefault());
           }
 
-          function clearOver() {
-            section && section.querySelectorAll('.tm-over-top,.tm-over-bottom').forEach((x) => x.classList.remove('tm-over-top', 'tm-over-bottom'));
-          }
+          // click po przeciągnięciu trafia czasem w inny wiersz – blokujemy go na całej sekcji
+          document.addEventListener('click', (e) => {
+            if (justDragged && section && section.contains(e.target)) { e.preventDefault(); e.stopPropagation(); }
+          }, true);
 
           // ---------- settings modal ----------
           async function openSettings() {
