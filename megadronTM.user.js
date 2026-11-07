@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.15
+// @version      1.2.16
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -12,6 +12,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_addStyle
+// @grant        GM_openInTab
 // @connect      client6220.idosell.com
 // @connect      edge.salescenter.allegro.com
 // @run-at       document-start
@@ -244,6 +245,414 @@
             var badDivs = $("#msg_line_msg");
             badDivs.remove();
         }
+    }
+
+
+    // ════════════════════════════════════════════════════════════════════════
+    // KARTONY – ALLEGRO ZAGRANICZNE (wymiary + automatyczna etykieta)
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (url.includes('/panel/order-verification.php')) {
+
+        // true = wpisuje wymiary, ale NIE klika "Generuj" (do testów)
+        const DRY_RUN = false;
+        const STORE_KEY = 'kartony';
+        const SELECTED_KEY = 'kartonWybrany';
+        const NAME_MAX = 10;
+
+        const kq = (sel, root = document) => root.querySelector(sel);
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+        const loadBoxes = () => { try { return GM_getValue(STORE_KEY, []) || []; } catch (e) { return []; } };
+        const saveBoxes = boxes => GM_setValue(STORE_KEY, boxes);
+
+        // Wartość wiersza tabeli zamówienia po etykiecie w pierwszej kolumnie
+        function rowText(label) {
+            const tr = [...document.querySelectorAll('tr')]
+                .find(t => t.cells.length >= 2 && t.cells[0].textContent.trim().startsWith(label));
+            return tr ? tr.cells[1].textContent.replace(/\s+/g, ' ').trim() : '';
+        }
+
+        // Allegro z dostawą za granicę: liczy się kraj dostawy (flaga / "(Kraj)" w adresie), nie domena źródła
+        function isForeignAllegro(link) {
+            if (!/^Allegro/i.test(rowText('Kurier'))) return false;
+            if (/allegro\.(?!pl\b)[a-z]{2}\b/i.test(rowText('Źródło zamówienia'))) return true;
+            const table = link.closest('table');
+            if (!table) return false;
+            const flags = [...table.querySelectorAll('img')]
+                .map(i => (i.getAttribute('src') || '').match(/(?:^|\/)([a-z]{2})\.png$/i))
+                .filter(Boolean).map(m => m[1].toLowerCase());
+            if (flags.some(cc => cc !== 'pl')) return true;
+            const countries = (table.rows[2]?.cells[1]?.textContent || '').match(/\(([^()]+)\)/g) || [];
+            return countries.some(c => !/Polska/i.test(c));
+        }
+
+        function waitFor(fn, timeout = 10000) {
+            return new Promise((resolve, reject) => {
+                const t0 = Date.now();
+                (function poll() {
+                    let v;
+                    try { v = fn(); } catch (e) { return reject(e); }
+                    if (v) return resolve(v);
+                    if (Date.now() - t0 > timeout) return reject(new Error('przekroczono czas oczekiwania'));
+                    setTimeout(poll, 100);
+                })();
+            });
+        }
+
+        // Ukryte panele YUI mają visibility:hidden + .yui-overlay-hidden, ale nadal offsetParent
+        const visible = el => !!el && el.offsetParent !== null && !el.closest('.yui-overlay-hidden')
+            && getComputedStyle(el).visibility !== 'hidden' && el.getClientRects().length > 0;
+        const panelBusy = () => visible(kq('#wait_c')) || visible(kq('#ajax_c'));
+
+        function setVal(el, v) {
+            el.focus();
+            el.value = String(v);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.blur();
+        }
+
+        // Widoczny komunikat IdoSell inny niż nasze okna (alert / błąd)
+        function findPanelAlert() {
+            const known = /^(windowTopLayer_c|teporaryStorageView_c|wait_c|ajax_c)$/;
+            const el = [...document.querySelectorAll('.yui-panel-container, .bootbox, .modal.in, .ui-dialog')]
+                .find(e => visible(e) && !known.test(e.id) && e.innerText.trim());
+            return el ? el.innerText.replace(/\s+/g, ' ').replace(/Close$/, '').trim() : '';
+        }
+        function closePanelAlert() {
+            const known = /^(windowTopLayer_c|teporaryStorageView_c|wait_c|ajax_c)$/;
+            [...document.querySelectorAll('.yui-panel-container, .bootbox, .modal.in, .ui-dialog')]
+                .filter(e => visible(e) && !known.test(e.id))
+                .forEach(e => kq('a.container-close, .close, .bootbox-close-button', e)?.click());
+        }
+
+        const BOX_SVG = `<svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
+            <path d="M16 3 4 8.5v15L16 29l12-5.5v-15z" fill="#c8894a"/>
+            <path d="M16 3 4 8.5 16 14l12-5.5z" fill="#e0a868"/>
+            <path d="M16 14v15L4 23.5v-15z" fill="#b5763a"/>
+            <path d="M10 5.7 22 11.2v4.3l-3 1.4v-4.3L7 7.1z" fill="#f3d3a1"/>
+        </svg>`;
+
+        function injectStyles() {
+            const css = `
+            .krb-card{margin:8px auto 2px;max-width:320px;background:#fff;border:1px solid #e2e5ea;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.08);padding:10px 12px;text-align:left;font-family:inherit}
+            .krb-bar{display:flex;gap:6px;align-items:stretch}
+            .krb-main{flex:1;display:flex;align-items:center;gap:8px;background:#3a3d42;color:#fff;border:0;border-radius:6px;padding:10px 14px;min-height:54px;font-size:13px;font-weight:500;cursor:pointer;text-align:left;line-height:1.25}
+            .krb-main:hover{background:#2b2e32}
+            .krb-main .ico{flex:none;display:flex;align-items:center;justify-content:center;width:38px;height:34px;background:#ffcc00;border-radius:5px}
+            .krb-main .ico svg{width:26px;height:26px}
+            .krb-main.busy{background:#5b6068;cursor:wait}
+            .krb-main.ok{background:#2e7d32}
+            .krb-main.err{background:#c62828}
+            .krb-gear{flex:none;width:44px;border:1px solid #cfd4da;background:#f6f7f9;border-radius:6px;cursor:pointer;font-size:16px;color:#555;display:flex;align-items:center;justify-content:center}
+            .krb-gear:hover,.krb-gear.on{background:#e8ecf1;color:#222}
+            .krb-pop{position:absolute;z-index:10000;width:290px;background:#fff;border:1px solid #dde1e6;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:12px;font-size:12px;text-align:left}
+            .krb-pop-h{display:flex;align-items:center;justify-content:space-between;font-size:14px;font-weight:600;color:#222;margin-bottom:10px}
+            .krb-x{cursor:pointer;color:#888;font-size:18px;line-height:1;padding:0 2px}
+            .krb-x:hover{color:#222}
+            .krb-tile{position:relative;display:flex;align-items:center;gap:10px;background:#e8f1fb;border:1px solid #a9c8ea;border-radius:8px;padding:9px 10px;margin-bottom:8px;cursor:pointer}
+            .krb-tile:hover{background:#d8e8f8;border-color:#5b9bd5}
+            .krb-tile .nm{font-weight:600;color:#222;font-size:13px}
+            .krb-tile .dm{color:#555;font-size:11.5px}
+            .krb-tile .del{position:absolute;right:8px;top:50%;transform:translateY(-50%);color:#c62828;font-size:15px;padding:2px 5px;border-radius:4px}
+            .krb-tile .del:hover{background:#fbe3e3}
+            .krb-tile.sel{background:#d3e6fa;border:2px solid #2a6db0;padding:8px 9px}
+            .krb-tile .chk{color:#2a6db0;font-weight:700;font-size:14px;margin-left:auto;margin-right:30px}
+            .krb-main .txt{display:flex;flex-direction:column;min-width:0;white-space:nowrap}
+            .krb-main .txt span{font-size:16px;font-weight:700;overflow:hidden;text-overflow:ellipsis}
+            .krb-main .txt small{font-size:12px;opacity:.8;font-weight:400;margin-top:2px}
+            .krb-toast{position:fixed;top:12px;right:12px;z-index:100000;max-width:360px;padding:9px 14px;border-radius:8px;color:#fff;background:#3a3d42;font-size:13px;box-shadow:0 6px 18px rgba(0,0,0,.25)}
+            .krb-toast.busy{background:#5b6068}.krb-toast.ok{background:#2e7d32}.krb-toast.err{background:#c62828}
+            .krb-add{border:1px dashed #c4ccd5;border-radius:8px;padding:8px;background:#fafbfc}
+            .krb-add .lbl{color:#666;margin-bottom:6px}
+            .krb-add .f{display:flex;gap:4px}
+            .krb-add input{min-width:0;font-size:12px;height:24px;padding:2px 5px;border:1px solid #ccd2d8;border-radius:4px}
+            .krb-add input.n{flex:2}.krb-add input.d{flex:1}
+            .krb-add button{flex:none;width:26px;height:24px;border:1px solid #5b9bd5;background:#e8f1fb;color:#2a6db0;border-radius:4px;cursor:pointer;font-size:15px;line-height:1}
+            .krb-empty{color:#777;padding:6px 2px 10px}
+            `;
+            const s = document.createElement('style');
+            s.textContent = css;
+            document.head.appendChild(s);
+        }
+
+        let busy = false;
+        let mainBtn, mainLabel;
+
+        // Wybrany karton (po nazwie); brak / usunięty -> pierwszy z listy
+        function getSelected() {
+            const boxes = loadBoxes();
+            let name = null;
+            try { name = GM_getValue(SELECTED_KEY, null); } catch (e) { }
+            return boxes.find(b => b.name === name) || boxes[0] || null;
+        }
+        const setSelected = box => GM_setValue(SELECTED_KEY, box ? box.name : null);
+
+        const log = (...a) => console.log('[Kartony]', ...a);
+
+        // Status pokazujemy też w stałym okienku – panel przeładowuje komórkę i karta znika
+        let toast, toastTimer;
+        function setStatus(state, text) {
+            if (mainBtn && mainBtn.isConnected) {
+                mainBtn.classList.remove('busy', 'ok', 'err');
+                if (state) mainBtn.classList.add(state);
+                mainLabel.textContent = text;
+            }
+            if (!toast || !toast.isConnected) {
+                toast = document.createElement('div');
+                document.body.appendChild(toast);
+            }
+            toast.className = 'krb-toast ' + (state || '');
+            toast.textContent = text;
+            clearTimeout(toastTimer);
+            if (state === 'ok') toastTimer = setTimeout(() => toast.remove(), 8000);
+            if (state === 'err') toast.onclick = () => toast.remove(); // błąd zostaje do kliknięcia
+            log(text);
+        }
+
+        // Przycisk główny pokazuje wybrany karton
+        function showSelected() {
+            if (busy || !mainBtn || !mainBtn.isConnected) return;
+            mainBtn.classList.remove('busy', 'ok', 'err');
+            const b = getSelected();
+            if (!b) {
+                mainLabel.textContent = 'Dodaj karton ⚙';
+                mainBtn.title = 'Brak kartonów – dodaj je w ustawieniach';
+                return;
+            }
+            mainLabel.innerHTML = '<span></span><small></small>';
+            mainLabel.firstChild.textContent = b.name.slice(0, NAME_MAX);
+            mainLabel.lastChild.textContent = `${b.h}×${b.w}×${b.l} cm`;
+            mainBtn.title = `Kliknij, aby wygenerować etykietę (wys × szer × dł: ${b.h} × ${b.w} × ${b.l} cm)`;
+        }
+
+        async function generate(box) {
+            if (busy) return;
+            busy = true;
+            closePop();
+            try {
+                const link = kq('a.generateNumber22');
+                if (!link) throw new Error('brak linku generowania');
+
+                // Krok 1: formularz z wymiarami -> "Generuj"
+                setStatus('busy', `Generuję: ${box.name}…`);
+                link.click();
+                const h = await waitFor(() => { const e = kq('#fg_Height'); return visible(e) && e; });
+                const panel = h.closest('#windowTopLayer_c') || h.closest('form') || document;
+                setVal(h, box.h);
+                setVal(kq('#fg_Width', panel), box.w);
+                setVal(kq('#fg_Length', panel), box.l);
+
+                if (DRY_RUN) {
+                    setStatus('ok', `Wpisano ${box.h}×${box.w}×${box.l} (test)`);
+                    busy = false;
+                    setTimeout(showSelected, 4000);
+                    return;
+                }
+
+                const submit = panel.querySelector('input.formbutton[type=submit], button[type=submit]');
+                if (!submit) throw new Error('brak przycisku Generuj');
+                // "Generuj" przeładowuje stronę i ten skrypt ginie – krok 2 dokończy jego nowa instancja
+                setPending(box);
+                submit.click();
+
+                // Gdyby panel jednak nie przeładował strony – dokończ tutaj
+                await waitFor(() => {
+                    const err = findPanelAlert();
+                    if (err) throw new Error(err);
+                    const cell = kq('a.generateNumber22')?.closest('td');
+                    return (!cell || !/Nie wygenerowano numeru/i.test(cell.textContent))
+                        && !visible(kq('#windowTopLayer_c')) && !panelBusy();
+                }, 30000);
+                if (!takePending()) return;
+                log('krok 1 OK (bez przeładowania)');
+                await finishLabel(box);
+            } catch (e) {
+                clearPending();
+                setStatus('err', '✗ ' + (e.message || e).slice(0, 120));
+                busy = false;
+                setTimeout(showSelected, 8000);
+            }
+        }
+
+        // --- Krok 2 przetrwa przeładowanie strony: flaga w sessionStorage (per karta) ---
+        const PENDING_KEY = 'krbPending';
+        const orderId = () => new URLSearchParams(location.search).get('idt') || '';
+        function setPending(box) {
+            try { sessionStorage.setItem(PENDING_KEY, JSON.stringify({ idt: orderId(), box, t: Date.now() })); } catch (e) { }
+        }
+        function clearPending() { try { sessionStorage.removeItem(PENDING_KEY); } catch (e) { } }
+        // Zwraca karton, jeśli dla tego zamówienia czeka krok 2 (i zdejmuje flagę)
+        function takePending() {
+            let p = null;
+            try { p = JSON.parse(sessionStorage.getItem(PENDING_KEY) || 'null'); } catch (e) { }
+            if (!p) return null;
+            clearPending();
+            return p.idt === orderId() && Date.now() - p.t < 180000 ? p.box : null;
+        }
+
+        // Krok 2: ponowne "Generowanie przesyłek…" faktycznie tworzy etykietę i pokazuje listę PDF.
+        // Panel wczytuje dane kilka sekund; gdy coś innego wyskoczy – zamykamy i ponawiamy.
+        async function finishLabel(box) {
+            busy = true;
+            try {
+                setStatus('busy', `Tworzę etykietę (${box.name})…`);
+                let pdf = null, lastMsg = '';
+                for (let i = 0; i < 10 && !pdf; i++) {
+                    if (i) await sleep(1000);
+                    await waitFor(() => !panelBusy(), 30000);
+                    const again = kq('a.generateNumber22');
+                    if (!again) throw new Error('brak linku generowania (sprawdź numer przesyłki)');
+                    log('krok 2, próba', i + 1);
+                    again.click();
+                    const r = await waitFor(() => {
+                        const p = kq('#teporaryStorageView_c');
+                        if (visible(p)) return [...p.querySelectorAll('a')].find(a => /\.pdf/i.test(a.textContent)) || null;
+                        const form = kq('#windowTopLayer_c');
+                        if (visible(form)) { kq('a.container-close', form)?.click(); return 'retry'; }
+                        const alert = findPanelAlert();
+                        if (alert) {
+                            lastMsg = alert;
+                            // Błąd od kuriera (np. "Nie udało się pobrać etykiety…") – ponawianie nic nie da
+                            if (/nie uda[łl]o si[ęe]|b[łl][ąa]d/i.test(alert)) return 'fatal';
+                            closePanelAlert();
+                            return 'retry';
+                        }
+                        return null;
+                    }, 20000).catch(() => 'retry');
+                    if (r === 'fatal') throw new Error(lastMsg);
+                    if (r !== 'retry') pdf = r;
+                }
+                if (!pdf) throw new Error(lastMsg || 'etykieta nie pojawiła się na liście');
+                log('etykieta', pdf.textContent.trim());
+
+                try { GM_openInTab(pdf.href, { active: true }); } catch (e) { pdf.click(); }
+                setStatus('ok', `Etykieta gotowa (${box.name})`);
+            } catch (e) {
+                setStatus('err', '✗ ' + (e.message || e).slice(0, 300));
+                busy = false;
+                setTimeout(showSelected, 8000);
+            }
+        }
+
+        // --- Popover z kartonami ---
+        let pop = null;
+        function closePop() {
+            if (!pop) return;
+            pop.remove(); pop = null;
+            document.querySelector('.krb-gear')?.classList.remove('on');
+            document.removeEventListener('mousedown', onOutside);
+            document.removeEventListener('keydown', onEsc);
+        }
+        function onOutside(e) { if (pop && !pop.contains(e.target) && !e.target.closest('.krb-bar')) closePop(); }
+        function onEsc(e) { if (e.key === 'Escape') closePop(); }
+
+        // ⚙: wybór kartonu (klik w kafelek), usuwanie (✕) i dodawanie nowych
+        function openPop(anchor) {
+            closePop();
+            pop = document.createElement('div');
+            pop.className = 'krb-pop';
+
+            const render = () => {
+                const boxes = loadBoxes();
+                const sel = getSelected();
+                pop.innerHTML = `<div class="krb-pop-h"><span>Szablony Pakowania (Kartony)</span><span class="krb-x" title="Zamknij">×</span></div>`;
+                pop.querySelector('.krb-x').onclick = closePop;
+
+                boxes.forEach((b, i) => {
+                    const isSel = sel && b.name === sel.name;
+                    const t = document.createElement('div');
+                    t.className = 'krb-tile' + (isSel ? ' sel' : '');
+                    t.innerHTML = `${BOX_SVG}<div><div class="nm"></div><div class="dm">${b.h} × ${b.w} × ${b.l} cm</div></div>${isSel ? '<span class="chk">✓</span>' : ''}`;
+                    t.querySelector('.nm').textContent = b.name;
+                    t.title = 'Kliknij, aby wybrać ten karton';
+                    t.onclick = () => { setSelected(b); showSelected(); closePop(); };
+                    const del = document.createElement('span');
+                    del.className = 'del'; del.title = 'Usuń'; del.textContent = '✕';
+                    del.onclick = e => {
+                        e.stopPropagation();
+                        boxes.splice(i, 1); saveBoxes(boxes);
+                        if (isSel) setSelected(boxes[0] || null);
+                        render(); showSelected();
+                    };
+                    t.appendChild(del);
+                    pop.appendChild(t);
+                });
+
+                const add = document.createElement('div');
+                add.className = 'krb-add';
+                add.innerHTML = `<div class="lbl">Nowy karton (wys × szer × dł, cm)</div><div class="f"><input class="n" placeholder="nazwa" maxlength="${NAME_MAX}"><input class="d" placeholder="wys"><input class="d" placeholder="szer"><input class="d" placeholder="dł"><button type="button" title="Dodaj">+</button></div>`;
+                const [n, h, w, l] = add.querySelectorAll('input');
+                const doAdd = () => {
+                    const dims = [h, w, l].map(x => parseFloat(x.value.replace(',', '.')));
+                    if (!n.value.trim() || dims.some(d => !(d > 0))) { n.focus(); return; }
+                    const box = { name: n.value.trim().slice(0, NAME_MAX), h: dims[0], w: dims[1], l: dims[2] };
+                    boxes.push(box); saveBoxes(boxes);
+                    if (boxes.length === 1) setSelected(box);
+                    render(); showSelected();
+                    pop.querySelector('.krb-add input.n').focus();
+                };
+                add.querySelector('button').onclick = doAdd;
+                add.querySelectorAll('input').forEach(x => x.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); doAdd(); } });
+                pop.appendChild(add);
+            };
+            render();
+
+            document.body.appendChild(pop);
+            const r = anchor.getBoundingClientRect();
+            pop.style.top = (r.bottom + window.scrollY + 6) + 'px';
+            pop.style.left = Math.max(6, Math.min(r.left + window.scrollX, window.scrollX + document.documentElement.clientWidth - pop.offsetWidth - 6)) + 'px';
+            document.addEventListener('mousedown', onOutside);
+            document.addEventListener('keydown', onEsc);
+        }
+
+        function init() {
+            const link = kq('a.generateNumber22');
+            if (!link || kq('.krb-card')) return;
+            const td = link.closest('td');
+            if (!td || !/Nie wygenerowano numeru/i.test(td.textContent) || !isForeignAllegro(link)) return;
+
+            injectStyles();
+            const card = document.createElement('div');
+            card.className = 'krb-card';
+            card.innerHTML = `
+                <div class="krb-bar">
+                    <button type="button" class="krb-main"><span class="ico">${BOX_SVG}</span><span class="txt"></span></button>
+                    <button type="button" class="krb-gear" title="Wybierz / dodaj karton">⚙</button>
+                </div>`;
+            td.appendChild(card);
+
+            mainBtn = kq('.krb-main', card);
+            mainLabel = kq('.txt', mainBtn);
+            const gear = kq('.krb-gear', card);
+            const bar = kq('.krb-bar', card);
+
+            const toggleGear = () => {
+                if (pop) return closePop();
+                openPop(bar);
+                gear.classList.add('on');
+            };
+            mainBtn.onclick = () => {
+                if (busy) return;
+                const b = getSelected();
+                if (!b) return toggleGear();
+                generate(b);
+            };
+            gear.onclick = toggleGear;
+            showSelected();
+        }
+
+        // Po przeładowaniu przez "Generuj" od razu dokończ krok 2
+        window.addEventListener("load", () => {
+            const pendingBox = takePending();
+            if (pendingBox) {
+                injectStyles();
+                finishLabel(pendingBox);
+            } else {
+                [0, 500, 1500].forEach(d => setTimeout(init, d));
+            }
+        });
     }
 
 
