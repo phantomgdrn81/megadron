@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.18
+// @version      1.2.19
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -46,72 +46,8 @@
         }
     }
 
-
     // ════════════════════════════════════════════════════════════════════════
-    // WERYFIKACJA ZAM. SORTOWANIE WEDŁUG LOKALIZACJI
-    // ════════════════════════════════════════════════════════════════════════
-
-    if (url.includes('/panel/order-verification.php')) {
-
-        window.addEventListener("load", () => {
-            addButtonSortujLokalizacje();
-        });
-
-        function addButtonSortujLokalizacje() {
-            if (document.getElementById('sortujLokalizacjeBtn')) return;
-
-            var descTd = [...document.querySelectorAll('td.tableRowDescription')].find(function (td) {
-                return /Krok 1/i.test(td.textContent);
-            });
-            if (!descTd) return;
-
-            var table = descTd.closest('table');
-            var tbody = table.querySelector('.yui-dt-data');
-            if (!tbody) return;
-
-            var btn = document.createElement('input');
-            btn.type = 'button';
-            btn.id = 'sortujLokalizacjeBtn';
-            btn.value = 'Sortuj wg lokalizacji';
-            btn.className = 'btn btn-xs btn-default';
-            btn.style.cssText = 'float:right; font-size:11px; padding:2px 8px;';
-            btn.addEventListener('click', function () {
-                sortujWierszeWgLokalizacji(tbody);
-            });
-
-            descTd.style.position = 'relative';
-            descTd.appendChild(btn);
-        }
-
-        function wyciagnijLokalizacje(row) {
-            var nameCell = row.querySelector('.yui-dt-col-name');
-            if (!nameCell) return null;
-            var text = nameCell.textContent;
-            var match = text.match(/Lokalizacje:\s*([^📦]+?)\s*📦/);
-            if (!match) return null;
-            var loc = match[1].trim();
-            if (!loc || /brak lokalizacji/i.test(loc)) return null;
-            return loc;
-        }
-
-        function sortujWierszeWgLokalizacji(tbody) {
-            var rows = [...tbody.querySelectorAll('tr')];
-            rows.sort(function (a, b) {
-                var locA = wyciagnijLokalizacje(a);
-                var locB = wyciagnijLokalizacje(b);
-                if (locA === null && locB === null) return 0;
-                if (locA === null) return 1;
-                if (locB === null) return -1;
-                return locA.localeCompare(locB, 'pl', { numeric: true });
-            });
-            rows.forEach(function (row) {
-                tbody.appendChild(row);
-            });
-        }
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    // GUZICZKI GABARYTÓW INPOST //offDF
+    // GUZICZKI GABARYTÓW INPOST //notmine
     // ════════════════════════════════════════════════════════════════════════
 
     if (url.includes('/panel/order-verification.php')) {
@@ -249,12 +185,11 @@
 
 
     // ════════════════════════════════════════════════════════════════════════
-    // KARTONY – ALLEGRO ZAGRANICZNE (wymiary + automatyczna etykieta)
+    // KARTONY – ALLEGRO ZAGRANICZNE (wpisywane wymiary)
     // ════════════════════════════════════════════════════════════════════════
 
     if (url.includes('/panel/order-verification.php')) {
 
-        // true = wpisuje wymiary, ale NIE klika "Generuj" (do testów)
         const DRY_RUN = false;
         const STORE_KEY = 'kartony';
         const SELECTED_KEY = 'kartonWybrany';
@@ -266,14 +201,12 @@
         const loadBoxes = () => { try { return GM_getValue(STORE_KEY, []) || []; } catch (e) { return []; } };
         const saveBoxes = boxes => GM_setValue(STORE_KEY, boxes);
 
-        // Wartość wiersza tabeli zamówienia po etykiecie w pierwszej kolumnie
         function rowText(label) {
             const tr = [...document.querySelectorAll('tr')]
                 .find(t => t.cells.length >= 2 && t.cells[0].textContent.trim().startsWith(label));
             return tr ? tr.cells[1].textContent.replace(/\s+/g, ' ').trim() : '';
         }
 
-        // Allegro z dostawą za granicę: liczy się kraj dostawy (flaga / "(Kraj)" w adresie), nie domena źródła
         function isForeignAllegro(link) {
             if (!/^Allegro/i.test(rowText('Kurier'))) return false;
             if (/allegro\.(?!pl\b)[a-z]{2}\b/i.test(rowText('Źródło zamówienia'))) return true;
@@ -300,7 +233,6 @@
             });
         }
 
-        // Ukryte panele YUI mają visibility:hidden + .yui-overlay-hidden, ale nadal offsetParent
         const visible = el => !!el && el.offsetParent !== null && !el.closest('.yui-overlay-hidden')
             && getComputedStyle(el).visibility !== 'hidden' && el.getClientRects().length > 0;
         const panelBusy = () => visible(kq('#wait_c')) || visible(kq('#ajax_c'));
@@ -313,7 +245,6 @@
             el.blur();
         }
 
-        // Widoczny komunikat IdoSell inny niż nasze okna (alert / błąd)
         function findPanelAlert() {
             const known = /^(windowTopLayer_c|teporaryStorageView_c|wait_c|ajax_c)$/;
             const el = [...document.querySelectorAll('.yui-panel-container, .bootbox, .modal.in, .ui-dialog')]
@@ -333,7 +264,7 @@
             <path d="M16 14v15L4 23.5v-15z" fill="#b5763a"/>
             <path d="M10 5.7 22 11.2v4.3l-3 1.4v-4.3L7 7.1z" fill="#f3d3a1"/>
         </svg>`;
-        // Szary karton do wiersza "Nowy karton"
+
         const BOX_SVG_GRAY = BOX_SVG.replace('#c8894a', '#d2d6db').replace('#e0a868', '#e3e6ea')
             .replace('#b5763a', '#c3c8ce').replace('#f3d3a1', '#f1f3f5');
         const GRIP_SVG = `<svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true" fill="#9aa1a9">
@@ -395,7 +326,6 @@
         let busy = false;
         let mainBtn, mainLabel;
 
-        // Wybrany karton (po nazwie); brak / usunięty -> pierwszy z listy
         function getSelected() {
             const boxes = loadBoxes();
             let name = null;
@@ -406,7 +336,6 @@
 
         const log = (...a) => console.log('[Kartony]', ...a);
 
-        // Status pokazujemy też w stałym okienku – panel przeładowuje komórkę i karta znika
         let toast, toastTimer;
         function setStatus(state, text) {
             if (mainBtn && mainBtn.isConnected) {
@@ -422,11 +351,10 @@
             toast.textContent = text;
             clearTimeout(toastTimer);
             if (state === 'ok') toastTimer = setTimeout(() => toast.remove(), 8000);
-            if (state === 'err') toast.onclick = () => toast.remove(); // błąd zostaje do kliknięcia
+            if (state === 'err') toast.onclick = () => toast.remove();
             log(text);
         }
 
-        // Przycisk główny pokazuje wybrany karton
         function showSelected() {
             if (busy || !mainBtn || !mainBtn.isConnected) return;
             mainBtn.classList.remove('busy', 'ok', 'err');
@@ -450,7 +378,6 @@
                 const link = kq('a.generateNumber22');
                 if (!link) throw new Error('brak linku generowania');
 
-                // Krok 1: formularz z wymiarami -> "Generuj"
                 setStatus('busy', `Generuję: ${box.name}…`);
                 link.click();
                 const h = await waitFor(() => { const e = kq('#fg_Height'); return visible(e) && e; });
@@ -468,11 +395,10 @@
 
                 const submit = panel.querySelector('input.formbutton[type=submit], button[type=submit]');
                 if (!submit) throw new Error('brak przycisku Generuj');
-                // "Generuj" przeładowuje stronę i ten skrypt ginie – krok 2 dokończy jego nowa instancja
+
                 setPending(box);
                 submit.click();
 
-                // Gdyby panel jednak nie przeładował strony – dokończ tutaj
                 await waitFor(() => {
                     const err = findPanelAlert();
                     if (err) throw new Error(err);
@@ -491,7 +417,7 @@
             }
         }
 
-        // --- Krok 2 przetrwa przeładowanie strony: flaga w sessionStorage (per karta) ---
+
         const PENDING_KEY = 'krbPending';
         const orderId = () => new URLSearchParams(location.search).get('idt') || '';
         function setPending(box) {
@@ -507,8 +433,6 @@
             return p.idt === orderId() && Date.now() - p.t < 180000 ? p.box : null;
         }
 
-        // Krok 2: ponowne "Generowanie przesyłek…" faktycznie tworzy etykietę i pokazuje listę PDF.
-        // Panel wczytuje dane kilka sekund; gdy coś innego wyskoczy – zamykamy i ponawiamy.
         async function finishLabel(box) {
             busy = true;
             try {
@@ -529,7 +453,7 @@
                         const alert = findPanelAlert();
                         if (alert) {
                             lastMsg = alert;
-                            // Błąd od kuriera (np. "Nie udało się pobrać etykiety…") – ponawianie nic nie da
+                            // Błąd od kuriera (np. "Nie udało się pobrać etykiety…")
                             if (/nie uda[łl]o si[ęe]|b[łl][ąa]d/i.test(alert)) return 'fatal';
                             closePanelAlert();
                             return 'retry';
@@ -563,7 +487,7 @@
         function onOutside(e) { if (pop && !pop.contains(e.target) && !e.target.closest('.krb-bar')) closePop(); }
         function onEsc(e) { if (e.key === 'Escape') closePop(); }
 
-        // ⚙: wybór kartonu (klik w kafelek), kolejność (przeciąganie kafelka), usuwanie (✕) i dodawanie nowych
+        //wybór kartonu
         function openPop(anchor) {
             closePop();
             pop = document.createElement('div');
@@ -588,8 +512,7 @@
                         setSelected(b); showSelected(); closePop();
                     };
 
-                    // Przeciąganie całego kafelka: jedzie za kursorem, sąsiednie płynnie robią miejsce.
-                    // Dopóki ruch < 5 px, to zwykły klik (wybór kartonu).
+                    // Przeciąganie całego kafelka
                     t.onpointerdown = e => {
                         if (e.button !== 0 || e.target.closest('.del') || boxes.length < 2) return;
                         e.preventDefault(); // bez zaznaczania tekstu; click nadal przychodzi
@@ -605,7 +528,7 @@
                             const shift = (i < n && j > i && j <= n) ? -step : (n < i && j >= n && j < i) ? step : 0;
                             x.style.transform = shift ? `translateY(${shift}px)` : '';
                         });
-                        // Nasłuch na całym oknie – kursor szybko zjeżdża z kafelka (pointer capture bywa zawodny w ramce panelu)
+                        // Nasłuch na całym oknie
                         const finish = () => {
                             window.removeEventListener('pointermove', onMove, true);
                             window.removeEventListener('pointerup', onUp, true);
@@ -669,7 +592,7 @@
                     pop.appendChild(t);
                 });
 
-                // Zwinięty wiersz "Nowy karton" – formularz pojawia się dopiero po kliknięciu
+                // Zwinięty wiersz "Nowy karton"
                 if (!adding) {
                     const row = document.createElement('div');
                     row.className = 'krb-addrow';
@@ -747,7 +670,6 @@
             showSelected();
         }
 
-        // Po przeładowaniu przez "Generuj" od razu dokończ krok 2
         window.addEventListener("load", () => {
             const pendingBox = takePending();
             if (pendingBox) {
