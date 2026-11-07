@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.19
+// @version      1.2.20
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -12,7 +12,6 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_addStyle
-// @grant        GM_openInTab
 // @connect      client6220.idosell.com
 // @connect      edge.salescenter.allegro.com
 // @run-at       document-start
@@ -465,8 +464,7 @@
                 }
                 if (!pdf) throw new Error(lastMsg || 'etykieta nie pojawiła się na liście');
                 log('etykieta', pdf.textContent.trim());
-
-                try { GM_openInTab(pdf.href, { active: true }); } catch (e) { pdf.click(); }
+                // Nic nie otwieramy – okienko IdoSell z listą etykiet zostaje na ekranie
                 setStatus('ok', `Etykieta gotowa (${box.name})`);
             } catch (e) {
                 setStatus('err', '✗ ' + (e.message || e).slice(0, 300));
