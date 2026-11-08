@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.30
+// @version      1.2.31
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -533,7 +533,7 @@
             .krb-pop.sorting{user-select:none;cursor:grabbing}
             .krb-tile .nm{font-weight:600;color:#222;font-size:13px}
             .krb-tile .dm{color:#333;font-size:13px;font-weight:600;margin-top:1px}
-            .krb-tile .del{position:absolute;right:8px;top:50%;transform:translateY(-50%);color:#c62828;font-size:15px;padding:2px 5px;border-radius:4px}
+            .krb-tile .del{position:absolute;right:8px;top:50%;transform:translateY(-50%);color:#c62828;font-size:15px;padding:2px 5px;border-radius:4px;cursor:pointer}
             .krb-tile .del:hover{background:#fbe3e3}
             .krb-tile.sel{background:#ffec9e;border:2px solid #e0b000;padding:8px 9px 8px 5px}
             .krb-main .txt{display:flex;flex-direction:column;min-width:0;white-space:nowrap}
