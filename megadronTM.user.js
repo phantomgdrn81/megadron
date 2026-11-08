@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.26
+// @version      1.2.27
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1228,13 +1228,17 @@
         function getCourierLabel(name) {
             const n = name.replace(/\s*\(Polska\)\s*$/i, '').trim();
             if (/^Allegro\b/i.test(n) && /pocztex/i.test(n)) return 'Pocztex';
+            if (/^Allegro\b/i.test(n) && /dpd/i.test(n)) return 'DPD';   // np. „Allegro One Box (DPD)”
             const courier = allegroCourierMap.find(c => c.match.test(n));
             if (!courier) return n.replace(/^Allegro\s+/i, '');
             if (/^Allegro\b/i.test(n)) {
                 if (courier.label === 'Packeta') return 'Orlen Paczka';
                 if (courier.label === 'One Kurier') return 'One\nKurier';   // zawijane w dwie linie
+                if (courier.label === 'InPost') return /paczkomat|automat|wszystkie rozmiary/i.test(n) ? 'InPost Paczkomat' : 'InPost Kurier';
                 return courier.label;
             }
+            if (courier.label === 'DPD') return '';   // DPD spoza Allegro – bez podpisu
+            if (/inpost international/i.test(n)) return '';   // InPost International – bez podpisu
 
             let type;
             if (courier.label === 'InPost') type = /paczkomat|automat|wszystkie rozmiary/i.test(n) ? 'Paczkomat' : 'Kurier';
