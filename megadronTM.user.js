@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.24
+// @version      1.2.25
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -59,7 +59,7 @@
             var scriptDelivery = document.getElementById("deliverer-number-count_" + IAI._orderNumber);
             scriptDelivery = scriptDelivery.getAttribute("onclick");
             scriptDelivery = scriptDelivery.replace('show_packages_edit_toplayer(event,', '');
-            scriptDelivery = scriptDelivery.replace(')', '');
+            scriptDelivery = scriptDelivery.replace(/\)\s*$/, '');
             var jsonObject = JSON.parse(scriptDelivery);
             var packageId = jsonObject.delivery_packages.packs[0].id;
 
@@ -84,54 +84,54 @@
             var badDivs = $("#msg_line_msg");
             badDivs.remove();
         }
+    }
 
-        // Przyciski A/B/C w dawnym stylu, z wymiarami paczkomatu. Pasek .gb-top nad nimi zostaje na dodatki (np. ikona wagi).
-        var GB_KAFELKI = [
-            { letter: 'A', dims: '8×38×64 cm', cls: 'btn btn-sm btn-success formbutton' },
-            { letter: 'B', dims: '19×38×64 cm', cls: 'btn btn-sm btn-warning formbutton' },
-            { letter: 'C', dims: '41×38×64 cm', cls: 'btn btn-sm btn-danger formbutton' },
-        ];
+    // Kafelki A/B/C (z wymiarami) – wspólne dla InPost i kurierów Allegro (dział niżej).
+    // Poza blokiem if, bo w trybie strict funkcja z bloku nie byłaby widoczna w innym dziale.
+    var GB_KAFELKI = [
+        { letter: 'A', dims: '8×38×64 cm', cls: 'btn btn-sm btn-success formbutton' },
+        { letter: 'B', dims: '19×38×64 cm', cls: 'btn btn-sm btn-warning formbutton' },
+        { letter: 'C', dims: '41×38×64 cm', cls: 'btn btn-sm btn-danger formbutton' },
+    ];
 
-        function gabarytKafelki(mydiv, onPick) {
-            if (!mydiv || document.getElementById('wyborGabarytu')) return;
-            if (!document.getElementById('gbStyle')) {
-                var st = document.createElement('style');
-                st.id = 'gbStyle';
-                st.textContent =
-                    '#wyborGabarytu{margin-top:8px;text-align:center}' +
-                    '#wyborGabarytu .gb-top{display:flex;justify-content:flex-end;align-items:center;min-height:22px}' +
-                    '#wyborGabarytu > b{font-size:15px}' +
-                    '#wyborGabarytu .gb-row{display:flex;gap:4px}' +
-                    '#wyborGabarytu .gb-btn{flex:1 1 0;min-width:0;height:58px;font-size:16px;border-radius:3px;line-height:1.15;padding:4px 6px}' +
-                    '#wyborGabarytu .gb-btn small{display:block;font-size:12px;opacity:.85;white-space:nowrap}';
-                document.head.appendChild(st);
-            }
-
-            var wrap = document.createElement('div');
-            wrap.id = 'wyborGabarytu';
-            wrap.innerHTML = '<div class="gb-top"></div><div class="gb-row"></div>';
-            var row = wrap.querySelector('.gb-row');
-
-            GB_KAFELKI.forEach(function (g) {
-                var btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = g.cls + ' gb-btn';
-                btn.innerHTML = 'Gabaryt ' + g.letter + '<small>' + g.dims + '</small>';
-                btn.addEventListener('click', function () {
-                    onPick(g.letter);
-                    wrap.innerHTML = '<br/><b>Przypisano gabaryt ' + g.letter + '!</b>';
-                    var fgCode = document.querySelector('#fg_code');
-                    if (fgCode) fgCode.focus();
-                });
-                row.appendChild(btn);
-            });
-
-            mydiv.appendChild(wrap);
+    function gabarytKafelki(mydiv, onPick) {
+        if (!mydiv || document.getElementById('wyborGabarytu')) return;
+        if (!document.getElementById('gbStyle')) {
+            var st = document.createElement('style');
+            st.id = 'gbStyle';
+            st.textContent =
+                '#wyborGabarytu{margin-top:8px;text-align:center}' +
+                '#wyborGabarytu > b{font-size:15px}' +
+                '#wyborGabarytu .gb-row{display:flex;gap:4px}' +
+                '#wyborGabarytu .gb-btn{flex:1 1 0;min-width:0;height:58px;font-size:16px;border-radius:3px;line-height:1.15;padding:4px 6px}' +
+                '#wyborGabarytu .gb-btn small{display:block;font-size:12px;opacity:.85;white-space:nowrap}';
+            document.head.appendChild(st);
         }
+
+        var wrap = document.createElement('div');
+        wrap.id = 'wyborGabarytu';
+        wrap.innerHTML = '<div class="gb-row"></div>';
+        var row = wrap.querySelector('.gb-row');
+
+        GB_KAFELKI.forEach(function (g) {
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = g.cls + ' gb-btn';
+            btn.innerHTML = 'Gabaryt ' + g.letter + '<small>' + g.dims + '</small>';
+            btn.addEventListener('click', function () {
+                onPick(g.letter);
+                wrap.innerHTML = '<br/><b>Przypisano gabaryt ' + g.letter + '!</b>';
+                var fgCode = document.querySelector('#fg_code');
+                if (fgCode) fgCode.focus();
+            });
+            row.appendChild(btn);
+        });
+
+        mydiv.appendChild(wrap);
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // WAGA PACZKI – IKONA NAD GABARYTAMI
+    // WAGA PACZKI – IKONA PRZY KURIERZE (każde zamówienie)
     // ════════════════════════════════════════════════════════════════════════
 
     if (url.includes('/panel/order-verification.php')) {
@@ -150,16 +150,19 @@
             } catch (e) { return null; }
         }
 
+        // Własny pasek z ikoną w komórce kuriera – niezależny od guzików gabarytów
         function addWagaGear() {
-            var top = document.querySelector('#wyborGabarytu .gb-top');
-            if (!top || top.querySelector('.wg-gear')) return;
+            if (document.getElementById('tmWagaBar')) return;
             var pack = wagaPackage();
             if (!pack) return;
+            var cell = document.getElementById("deliverer-number-count_" + IAI._orderNumber).closest('td');
+            if (!cell) return;
 
             if (!document.getElementById('wgStyle')) {
                 var st = document.createElement('style');
                 st.id = 'wgStyle';
                 st.textContent =
+                    '#tmWagaBar{display:flex;justify-content:flex-end;align-items:center;margin-top:6px}' +
                     '.wg-gear{border:0;background:none;color:#7d848c;line-height:0;padding:3px;border-radius:5px;cursor:pointer}' +
                     '.wg-gear svg{width:20px;height:20px}' +
                     '.wg-gear:hover,.wg-gear.on{color:#333;background:#eef0f3}' +
@@ -191,7 +194,13 @@
                 if (document.querySelector('.wg-pop')) return wagaClose();
                 wagaOpen(gear, pack);
             });
-            top.appendChild(gear);
+
+            var bar = document.createElement('div');
+            bar.id = 'tmWagaBar';
+            bar.appendChild(gear);
+            var kafelki = document.getElementById('wyborGabarytu');
+            if (kafelki && kafelki.parentNode === cell) cell.insertBefore(bar, kafelki);
+            else cell.appendChild(bar);
         }
 
         function wagaClose() {
@@ -358,54 +367,25 @@
             var mydiv = deliveryEl.closest('td');
             if (!mydiv) return;
 
-            var wrap = document.createElement('div');
-            wrap.id = 'wyborGabarytu';
-            wrap.innerHTML = '<br/>';
-
-            var btnClasses = [
-                'btn btn-sm btn-success formbutton',
-                'btn btn-sm btn-warning formbutton',
-                'btn btn-sm btn-danger formbutton',
-                'btn btn-sm btn-default formbutton',
-            ];
-
+            // Wartości gabarytów z selecta panelu (pierwsze trzy = A/B/C), inaczej S/M/L
             var gaugeSelect = document.querySelector('select#fg_defaultParcelGauge');
-            var gauges = (gaugeSelect && gaugeSelect.options.length > 0)
-                ? [...gaugeSelect.options].filter(o => o.value).map(o => ({ value: o.value, label: o.textContent.trim() }))
-                : [
-                    { value: 'S', label: 'Gabaryt A' },
-                    { value: 'M', label: 'Gabaryt B' },
-                    { value: 'L', label: 'Gabaryt C' },
-                ];
+            var values = gaugeSelect ? [...gaugeSelect.options].map(o => o.value).filter(Boolean) : [];
+            if (values.length < 3) values = ['S', 'M', 'L'];
+            var gauge = { A: values[0], B: values[1], C: values[2] };
 
-            gauges.forEach(function (g, i) {
-                var btn = document.createElement('input');
-                btn.type = 'button';
-                btn.value = g.label;
-                btn.className = btnClasses[i] || 'btn btn-sm btn-default formbutton';
-                btn.style.cssText = 'margin-top:20px; height:50px; font-size:15px; border-radius: 3px';
-                btn.addEventListener('click', function () {
-                    IAI.ajax.post(
-                        '/panel/ajax/packages-gateway.php', '',
-                        'defaultParcelGauge=' + g.value +
-                        '&courierId=' + jsonObject.deliverer_id +
-                        '&action=generate&orders[]=' + jsonObject.order_id
-                    );
-
-                    wrap.innerHTML = '<br/><b>Przypisano gabaryt ' + g.value + '!</b>';
-
-                    var fgCode = document.querySelector('#fg_code');
-                    if (fgCode) fgCode.focus();
-
-                    setTimeout(function () {
-                        var link = document.querySelector('.generateNumber22');
-                        if (link) link.click();
-                    }, 1200);
-                });
-                wrap.appendChild(btn);
+            // Te same kafelki co przy InPost (wspólna funkcja gabarytKafelki)
+            gabarytKafelki(mydiv, function (letter) {
+                IAI.ajax.post(
+                    '/panel/ajax/packages-gateway.php', '',
+                    'defaultParcelGauge=' + gauge[letter] +
+                    '&courierId=' + jsonObject.deliverer_id +
+                    '&action=generate&orders[]=' + jsonObject.order_id
+                );
+                setTimeout(function () {
+                    var link = document.querySelector('.generateNumber22');
+                    if (link) link.click();
+                }, 1200);
             });
-
-            mydiv.appendChild(wrap);
 
             var badDivs = $("#msg_line_msg");
             badDivs.remove();
