@@ -15,8 +15,8 @@
 // @connect      client6220.idosell.com
 // @connect      edge.salescenter.allegro.com
 // @run-at       document-start
-// @updateURL    https://raw.githubusercontent.com/phantomgdrn81/megadron/refs/heads/main/megadronTM.user.js
-// @downloadURL  https://raw.githubusercontent.com/phantomgdrn81/megadron/refs/heads/main/megadronTM.user.js
+// @updateURL    https://raw.githubusercontent.com/phantomgdrn81/megadron/refs/heads/main/megadronTM-Lite.user.js
+// @downloadURL  https://raw.githubusercontent.com/phantomgdrn81/megadron/refs/heads/main/megadronTM-Lite.user.js
 // ==/UserScript==
 
 /* global $, IAI */ //clearing the triggers
