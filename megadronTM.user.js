@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.22
+// @version      1.2.23
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1219,23 +1219,51 @@
     // ALLEGRO OPISY KURIERÓW
     // ════════════════════════════════════════════════════════════════════════
 
-    if (url.includes('client6220.idosell.com')) {
+    if (url.includes('/panel/orders-list.php')) {
 
+        // Kolejność ma znaczenie: "Packeta, ORLEN Paczka" to Packeta, "One Box (DPD)" to One
         const allegroCourierMap = [
-            { match: /orlen/i, label: 'Orlen Paczka' },
-            { match: /dpd/i, label: 'DPD' },
-            { match: /\bone\b/i, label: 'One Kurier' },
+            { match: /packeta/i, label: 'Packeta' },
             { match: /inpost/i, label: 'InPost' },
+            { match: /\bone\b/i, label: 'One' },
+            { match: /dpd/i, label: 'DPD' },
             { match: /dhl/i, label: 'DHL' },
-            { match: /ups/i, label: 'UPS' },
+            { match: /orlen/i, label: 'Orlen' },
+            { match: /\bups\b/i, label: 'UPS' },
+            { match: /\bgls\b/i, label: 'GLS' },
+            { match: /fedex/i, label: 'FedEx' },
             { match: /pocztex/i, label: 'Pocztex' },
+            { match: /poczta polska/i, label: 'Poczta Polska' },
         ];
 
+        const courierCountries = [
+            [/holandi/i, 'NL'], [/austri/i, 'AT'], [/czech/i, 'CZ'], [/słowacj/i, 'SK'], [/węgi?r/i, 'HU'],
+            [/niemc|niemiec/i, 'DE'], [/litw/i, 'LT'], [/łotw/i, 'LV'], [/estoni/i, 'EE'], [/rumuni/i, 'RO'],
+            [/słoweni/i, 'SI'], [/chorwacj/i, 'HR'], [/belgi/i, 'BE'], [/franc/i, 'FR'], [/włoch/i, 'IT'], [/hiszpani/i, 'ES'],
+        ];
+
+        // Krótka nazwa: przewoźnik + rodzaj (Automat / Punkt / Kurier / Paczkomat / Box) + kraj dla zagranicznych
         function getCourierLabel(name) {
-            for (const courier of allegroCourierMap) {
-                if (courier.match.test(name)) return courier.label;
+            const n = name.replace(/\s*\(Polska\)\s*$/i, '').trim();
+            const courier = allegroCourierMap.find(c => c.match.test(n));
+            if (!courier) return n.replace(/^Allegro\s+/i, '');
+
+            let type;
+            if (courier.label === 'InPost') type = /paczkomat|automat|wszystkie rozmiary/i.test(n) ? 'Paczkomat' : 'Kurier';
+            else if (courier.label === 'One' && /\bbox\b/i.test(n)) type = 'Box';
+            else if (/automat|\bbox\b/i.test(n)) type = 'Automat';
+            else if (/punkt|odbiór w/i.test(n)) type = 'Punkt';
+            else type = 'Kurier';
+
+            let country = '';
+            const domain = n.match(/allegro\.([a-z]{2})\b/i);
+            if (domain && domain[1].toLowerCase() !== 'pl') country = domain[1].toUpperCase();
+            else {
+                const c = courierCountries.find(([re]) => re.test(n));
+                if (c) country = c[1];
+                else if (/zagraniczn/i.test(n)) country = 'zagr.';
             }
-            return null;
+            return courier.label + ' ' + type + (country ? ' (' + country + ')' : '');
         }
 
         function addCourierLabels() {
@@ -1245,7 +1273,6 @@
                 if (parent.querySelector('.tm-courier-label')) return;
                 const fullName = img.title || img.alt;
                 if (!fullName) return;
-                if (!/allegro/i.test(fullName)) return;
                 const shortName = getCourierLabel(fullName);
                 if (!shortName) return;
 
@@ -1253,20 +1280,205 @@
                 const label = document.createElement('div');
                 label.className = 'tm-courier-label';
                 label.textContent = shortName;
-                label.style.fontSize = '12px';
+                label.style.fontSize = '11px';     // „Paczkomat” mieści się w wąskiej kolumnie bez łamania słowa
                 label.style.fontWeight = '600';
                 label.style.lineHeight = '1.3';
                 label.style.marginTop = '4px';
                 label.style.color = '#333';
                 label.style.whiteSpace = 'normal';
-                label.style.wordBreak = 'break-word';
-                label.style.maxWidth = '70px';
                 parent.appendChild(label);
             });
         }
 
         addCourierLabels();
         new MutationObserver(addCourierLabels).observe(document.documentElement, { childList: true, subtree: true });
+    }
+
+
+    // ════════════════════════════════════════════════════════════════════════
+    // SORTOWANIE PO KURIERZE (lista zamówień)
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (url.includes('/panel/orders-list.php')) {
+
+        // Serwer nie sortuje po kurierze: dociągamy wszystkie strony z bieżącym filtrem,
+        // sortujemy alfabetycznie po nazwie kuriera i pokazujemy je na jednej stronie.
+        const SORT_MAX = 1000;
+        let sortDT = null;
+        let sortDir = null;          // 'asc' | 'desc' gdy lista jest posortowana po kurierze
+        let sortRecords = null;      // pobrane rekordy (do odwracania kolejności bez ponownego pobierania)
+        let sortRowsPerPage = 100;
+        let sortBusy = false;
+
+        function findDataTable() {
+            if (sortDT) return sortDT;
+            const w = unsafeWindow;
+            const seen = new Set();
+            const visit = (o, depth) => {
+                if (sortDT || !o || typeof o !== 'object' || seen.has(o) || depth > 3) return;
+                seen.add(o);
+                try {
+                    if (typeof o.getRecordSet === 'function' && typeof o.getDataSource === 'function' && o.getColumn && o.getColumn('deliverer')) { sortDT = o; return; }
+                    for (const k of Object.keys(o).slice(0, 300)) { try { visit(o[k], depth + 1); } catch (e) { /* ignore */ } }
+                } catch (e) { /* ignore */ }
+            };
+            for (const k of Object.keys(w)) {
+                try { const v = w[k]; if (v && typeof v === 'object' && !(v instanceof w.Node)) visit(v, 0); } catch (e) { /* ignore */ }
+                if (sortDT) break;
+            }
+            return sortDT;
+        }
+
+        let sortToast;
+        function sortStatus(text, isErr) {
+            if (!sortToast || !sortToast.isConnected) {
+                sortToast = document.createElement('div');
+                sortToast.style.cssText = 'position:fixed;top:12px;right:12px;z-index:100000;max-width:360px;padding:9px 14px;border-radius:8px;color:#fff;font-size:13px;box-shadow:0 6px 18px rgba(0,0,0,.25);cursor:pointer';
+                sortToast.addEventListener('click', () => sortToast.remove());
+                document.body.appendChild(sortToast);
+            }
+            sortToast.style.background = isErr ? '#c62828' : '#3a3d42';
+            sortToast.textContent = text;
+            clearTimeout(sortToast._t);
+            if (!text.endsWith('…')) sortToast._t = setTimeout(() => sortToast.remove(), isErr ? 6000 : 2500);
+        }
+
+        function sortHeaderCell() {
+            return document.querySelector('th.yui-dt0-col-deliverer, th[class*="-col-deliverer"]');
+        }
+
+        function markHeader() {
+            const th = sortHeaderCell();
+            if (!th) return;
+            th.classList.remove('yui-dt-asc', 'yui-dt-desc');
+            if (!sortDir) return;
+            document.querySelectorAll('thead th').forEach(x => { if (x !== th) x.classList.remove('yui-dt-asc', 'yui-dt-desc', 'asc', 'desc'); });
+            th.classList.add('yui-dt-' + sortDir);
+        }
+
+        function renderSorted() {
+            const dt = findDataTable();
+            const recs = sortRecords.slice().sort((a, b) => {
+                const an = (a.deliverer && a.deliverer.deliverer_name) || '';
+                const bn = (b.deliverer && b.deliverer.deliverer_name) || '';
+                const c = an.localeCompare(bn, 'pl', { sensitivity: 'base' });
+                if (c) return sortDir === 'asc' ? c : -c;
+                return (parseInt(b.id && b.id.order_number, 10) || 0) - (parseInt(a.id && a.id.order_number, 10) || 0);
+            });
+            const pg = dt.get('paginator');
+            if (pg) {
+                pg.setRowsPerPage(recs.length, true);
+                pg.setTotalRecords(recs.length, true);
+                pg.setPage(1, true);
+            }
+            dt.getRecordSet().reset();
+            dt.getRecordSet().setRecords(recs, 0);
+            dt.render();
+            markHeader();
+        }
+
+        function fetchPage(dt, page, rpp) {
+            return new Promise((resolve, reject) => {
+                const req = dt.get('generateRequest')({ pagination: { page: page, rowsPerPage: rpp, recordOffset: (page - 1) * rpp }, sortedBy: dt.get('sortedBy') }, true);
+                dt.getDataSource().sendRequest(req, { success: (rq, resp) => resolve(resp.results || []), failure: () => reject(new Error('strona ' + page)), scope: dt });
+            });
+        }
+
+        async function sortByCourier() {
+            if (sortBusy) return;
+            const dt = findDataTable();
+            if (!dt) { sortStatus('Nie znaleziono tabeli zamówień', true); return; }
+
+            // Kolejny klik tylko odwraca kolejność
+            if (sortDir && sortRecords) {
+                sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+                renderSorted();
+                return;
+            }
+
+            const pg = dt.get('paginator');
+            const rpp = pg ? pg.getRowsPerPage() : 100;
+            const total = pg ? pg.getTotalRecords() : dt.getRecordSet().getLength();
+            if (total > SORT_MAX) {
+                sortStatus('Za dużo zamówień (' + total + '). Zawęź filtr, żeby sortować po kurierze (max ' + SORT_MAX + ').', true);
+                return;
+            }
+
+            sortBusy = true;
+            try {
+                let records;
+                if (total <= rpp) {
+                    records = dt.getRecordSet().getRecords().map(r => r.getData());
+                } else {
+                    const pages = Math.ceil(total / rpp);
+                    const results = new Array(pages);
+                    let done = 0, next = 1;
+                    sortStatus('Sortuję po kurierze… 0/' + pages);
+                    const worker = async () => {
+                        while (next <= pages) {
+                            const p = next++;
+                            results[p - 1] = await fetchPage(dt, p, rpp);
+                            sortStatus('Sortuję po kurierze… ' + (++done) + '/' + pages);
+                        }
+                    };
+                    await Promise.all([worker(), worker(), worker()]);
+                    records = [].concat(...results);
+                }
+                sortRowsPerPage = rpp;
+                sortRecords = records;
+                sortDir = 'asc';
+                renderSorted();
+                sortStatus('Posortowano po kurierze (' + records.length + ')');
+            } catch (e) {
+                sortStatus('Nie udało się pobrać zamówień: ' + e.message, true);
+            } finally {
+                sortBusy = false;
+            }
+        }
+
+        // Inny nagłówek albo paginator: najpierw wracamy do zwykłego stronicowania panelu
+        function restoreNormalPaging(e) {
+            if (!sortDir) return;
+            const th = e.target.closest('thead th');
+            const inPager = e.target.closest('.yui-pg-container');
+            if ((!th || th === sortHeaderCell()) && !inPager) return;
+            const dt = findDataTable();
+            const pg = dt && dt.get('paginator');
+            if (pg) pg.setRowsPerPage(sortRowsPerPage, true);
+            sortDir = null;
+            sortRecords = null;
+            const own = sortHeaderCell();
+            if (own) own.classList.remove('yui-dt-asc', 'yui-dt-desc');
+        }
+
+        function mountCourierSort() {
+            const th = sortHeaderCell();
+            if (!th || th.querySelector('.tm-sort-kurier')) return;
+            const liner = th.querySelector('.yui-dt-label') || th.querySelector('.yui-dt-liner') || th;
+            const a = document.createElement('a');
+            a.href = '#';
+            a.className = 'yui-dt-sortable tm-sort-kurier';
+            a.title = 'Sortuj po kurierze (wszystkie strony)';
+            a.textContent = liner.textContent.trim() || 'Kurier';
+            liner.textContent = '';
+            liner.appendChild(a);
+            th.classList.add('yui-dt-sortable');
+            th.style.cursor = 'pointer';
+            th.addEventListener('click', e => { e.preventDefault(); sortByCourier(); });
+            markHeader();
+        }
+
+        document.addEventListener('click', restoreNormalPaging, true);
+        let sortMountTimer;
+        new MutationObserver(() => {
+            clearTimeout(sortMountTimer);
+            sortMountTimer = setTimeout(mountCourierSort, 200);
+        }).observe(document.documentElement, { childList: true, subtree: true });
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', mountCourierSort);
+        } else {
+            mountCourierSort();
+        }
     }
 
 
@@ -1524,32 +1736,24 @@
 
     if (url.includes('/panel/orders-list.php')) {
 
-        const styleApi = document.createElement('style');
-        styleApi.textContent = 'tr.tm-api-order td { background-color: #c8e6c9 !important; }';
-        document.head.appendChild(styleApi);
+        // GM_addStyle działa też przy document-start (document.head może jeszcze nie istnieć)
+        GM_addStyle('tr.tm-api-order td { background-color: #c8e6c9 !important; }');
 
         function runApiOrders() {
             document.querySelectorAll('table tbody tr').forEach(tr => {
-                const statusCell = tr.querySelector('td.yui-dt0-col-status');
+                const statusCell = tr.querySelector('td.yui-dt0-col-status, td[class*="-col-status"]');
                 if (!statusCell) return;
-                const hasApi = [...statusCell.querySelectorAll('span')].some(span =>
-                    span.textContent.trim() === 'zarejestrowane przez API'
-                );
-                if (hasApi) {
-                    tr.classList.add('tm-api-order');
-                } else {
-                    tr.classList.remove('tm-api-order');
-                }
+                const hasApi = /zarejestrowane przez API/i.test(statusCell.textContent);
+                tr.classList.toggle('tm-api-order', hasApi);
             });
         }
 
+        // Obserwator działa cały czas: lista przeładowuje się przy zmianie strony, sortowaniu i filtrach
         let debounceApi;
-        const observerApi = new MutationObserver(() => {
+        new MutationObserver(() => {
             clearTimeout(debounceApi);
-            debounceApi = setTimeout(runApiOrders, 600);
-        });
-        observerApi.observe(document.documentElement, { childList: true, subtree: true });
-        setTimeout(() => { observerApi.disconnect(); runApiOrders(); }, 8000);
+            debounceApi = setTimeout(runApiOrders, 300);
+        }).observe(document.documentElement, { childList: true, subtree: true });
 
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', runApiOrders);
