@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.21
+// @version      1.2.22
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -85,11 +85,11 @@
             badDivs.remove();
         }
 
-        // Kafelki A/B/C (wymiary paczkomatu). Pasek .gb-top nad nimi zostaje na dodatki (np. zębatka wagi).
+        // Przyciski A/B/C w dawnym stylu, z wymiarami paczkomatu. Pasek .gb-top nad nimi zostaje na dodatki (np. ikona wagi).
         var GB_KAFELKI = [
-            { letter: 'A', dims: '8×38×64 cm', color: '#2e9d57', light: '#6cc68f', dark: '#217a42', tint: '#eef8f1' },
-            { letter: 'B', dims: '19×38×64 cm', color: '#e6b000', light: '#f6d35a', dark: '#b88a00', tint: '#fff8e1' },
-            { letter: 'C', dims: '41×38×64 cm', color: '#c0392b', light: '#e0786c', dark: '#922b20', tint: '#fdeeee' },
+            { letter: 'A', dims: '8×38×64 cm', cls: 'btn btn-sm btn-success formbutton' },
+            { letter: 'B', dims: '19×38×64 cm', cls: 'btn btn-sm btn-warning formbutton' },
+            { letter: 'C', dims: '41×38×64 cm', cls: 'btn btn-sm btn-danger formbutton' },
         ];
 
         function gabarytKafelki(mydiv, onPick) {
@@ -98,15 +98,12 @@
                 var st = document.createElement('style');
                 st.id = 'gbStyle';
                 st.textContent =
-                    '#wyborGabarytu{margin-top:12px;text-align:left}' +
-                    '#wyborGabarytu .gb-top{display:flex;justify-content:flex-end;align-items:center;min-height:18px;margin-bottom:4px}' +
-                    '#wyborGabarytu .gb-row{display:flex;gap:6px}' +
-                    '#wyborGabarytu .gb-tile{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 4px 7px;background:#fff;border:2px solid var(--gb);border-radius:8px;cursor:pointer;font-family:inherit;line-height:1.2;transition:background .12s,transform .12s,box-shadow .12s}' +
-                    '#wyborGabarytu .gb-tile:hover{background:var(--gb-tint);box-shadow:0 2px 6px rgba(0,0,0,.12);transform:translateY(-1px)}' +
-                    '#wyborGabarytu .gb-tile:active{transform:translateY(1px);box-shadow:none}' +
-                    '#wyborGabarytu .gb-tile svg{width:26px;height:26px;margin-bottom:2px}' +
-                    '#wyborGabarytu .gb-name{font-size:15px;font-weight:700;color:#222;white-space:nowrap}' +
-                    '#wyborGabarytu .gb-dims{font-size:12px;color:#555;white-space:nowrap}';
+                    '#wyborGabarytu{margin-top:8px;text-align:center}' +
+                    '#wyborGabarytu .gb-top{display:flex;justify-content:flex-end;align-items:center;min-height:22px}' +
+                    '#wyborGabarytu > b{font-size:15px}' +
+                    '#wyborGabarytu .gb-row{display:flex;gap:4px}' +
+                    '#wyborGabarytu .gb-btn{flex:1 1 0;min-width:0;height:58px;font-size:16px;border-radius:3px;line-height:1.15;padding:4px 6px}' +
+                    '#wyborGabarytu .gb-btn small{display:block;font-size:12px;opacity:.85;white-space:nowrap}';
                 document.head.appendChild(st);
             }
 
@@ -118,18 +115,8 @@
             GB_KAFELKI.forEach(function (g) {
                 var btn = document.createElement('button');
                 btn.type = 'button';
-                btn.className = 'gb-tile';
-                btn.style.setProperty('--gb', g.color);
-                btn.style.setProperty('--gb-tint', g.tint);
-                btn.innerHTML =
-                    '<svg viewBox="0 0 32 32" aria-hidden="true">' +
-                    '<path d="M16 3 4 8.5v15L16 29l12-5.5v-15z" fill="' + g.color + '"/>' +
-                    '<path d="M16 3 4 8.5 16 14l12-5.5z" fill="' + g.light + '"/>' +
-                    '<path d="M16 14v15L4 23.5v-15z" fill="' + g.dark + '"/>' +
-                    '<path d="M10 5.7 22 11.2v4.3l-3 1.4v-4.3L7 7.1z" fill="#fff" opacity=".55"/>' +
-                    '</svg>' +
-                    '<span class="gb-name">Gabaryt ' + g.letter + '</span>' +
-                    '<span class="gb-dims">' + g.dims + '</span>';
+                btn.className = g.cls + ' gb-btn';
+                btn.innerHTML = 'Gabaryt ' + g.letter + '<small>' + g.dims + '</small>';
                 btn.addEventListener('click', function () {
                     onPick(g.letter);
                     wrap.innerHTML = '<br/><b>Przypisano gabaryt ' + g.letter + '!</b>';
@@ -144,7 +131,7 @@
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // WAGA PACZKI – ZĘBATKA NAD GABARYTAMI
+    // WAGA PACZKI – IKONA NAD GABARYTAMI
     // ════════════════════════════════════════════════════════════════════════
 
     if (url.includes('/panel/order-verification.php')) {
@@ -173,7 +160,8 @@
                 var st = document.createElement('style');
                 st.id = 'wgStyle';
                 st.textContent =
-                    '.wg-gear{border:0;background:none;color:#8a9097;font-size:15px;line-height:1;padding:2px 4px;border-radius:4px;cursor:pointer}' +
+                    '.wg-gear{border:0;background:none;color:#7d848c;line-height:0;padding:3px;border-radius:5px;cursor:pointer}' +
+                    '.wg-gear svg{width:20px;height:20px}' +
                     '.wg-gear:hover,.wg-gear.on{color:#333;background:#eef0f3}' +
                     '.wg-pop{position:absolute;z-index:10000;width:220px;background:#fff;border:1px solid #dde1e6;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:12px;font-size:12px;text-align:left}' +
                     '.wg-pop .wg-h{font-size:13px;font-weight:600;color:#222;margin-bottom:8px}' +
@@ -184,7 +172,7 @@
                     '.wg-pop .wg-save{width:100%;height:30px;border:0;border-radius:6px;background:#3a3d42;color:#fff;font-weight:600;cursor:pointer}' +
                     '.wg-pop .wg-save:hover{background:#2b2e32}' +
                     '.wg-pop .wg-save:disabled{opacity:.6;cursor:wait}' +
-                    '.wg-pop .wg-msg{margin-top:6px;min-height:14px;font-weight:600}' +
+                    '.wg-pop .wg-msg{margin-top:6px;min-height:14px;font-weight:600;text-align:center}' +
                     '.wg-pop .wg-msg.ok{color:#2e7d32}.wg-pop .wg-msg.err{color:#c62828}';
                 document.head.appendChild(st);
             }
@@ -193,7 +181,11 @@
             gear.type = 'button';
             gear.className = 'wg-gear';
             gear.title = 'Zmień wagę paczki';
-            gear.textContent = '⚙';
+            // odważnik z uchwytem i napisem „kg”
+            gear.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+                '<path d="M12 2.5a4.5 4.5 0 0 0-4.2 6.1H6.6a1.6 1.6 0 0 0-1.6 1.3L3.1 19.6A1.6 1.6 0 0 0 4.7 21.5h14.6a1.6 1.6 0 0 0 1.6-1.9L19 9.9a1.6 1.6 0 0 0-1.6-1.3h-1.2A4.5 4.5 0 0 0 12 2.5zm0 2a2.5 2.5 0 0 1 2 4.1h-4a2.5 2.5 0 0 1 2-4.1z"/>' +
+                '<text x="12" y="18.2" text-anchor="middle" font-size="7.5" font-weight="700" font-family="Arial,sans-serif" fill="#fff">kg</text>' +
+                '</svg>';
             gear.addEventListener('click', function (e) {
                 e.stopPropagation();
                 if (document.querySelector('.wg-pop')) return wagaClose();
@@ -213,7 +205,8 @@
             if (!e.target.closest('.wg-pop, .wg-gear')) wagaClose();
         }
 
-        // Jak na stronie zamówienia: wpisujemy wagę całej paczki, opakowanie = całość − produkty
+        // Wpisujemy wagę całkowitą (pierwsze okienko na stronie zamówienia). IdoSell przechowuje ją jako
+        // produkty + opakowanie, więc tak jak panel: opakowanie = całkowita − produkty.
         function wagaOpen(gear, pack) {
             var products = parseInt(pack.products_weight, 10) || 0;
             var packaging = parseInt(pack.packaging_weight, 10) || 0;
@@ -221,7 +214,7 @@
             var pop = document.createElement('div');
             pop.className = 'wg-pop';
             pop.innerHTML =
-                '<div class="wg-h">Waga paczki</div>' +
+                '<div class="wg-h">Waga całkowita paczki</div>' +
                 '<div class="wg-f"><input type="number" min="0" step="1"><span class="wg-u">g</span></div>' +
                 '<div class="wg-info"></div>' +
                 '<button type="button" class="wg-save">Zapisz</button>' +
@@ -232,12 +225,11 @@
             var msg = pop.querySelector('.wg-msg');
 
             var refresh = function () {
-                var total = parseInt(input.value, 10) || 0;
-                info.textContent = 'produkty ' + products + ' g + opakowanie ' + (total - products) + ' g';
+                info.textContent = 'obecnie: ' + (products + packaging) + ' g';
             };
             input.value = products + packaging;
             refresh();
-            input.addEventListener('input', function () { refresh(); msg.textContent = ''; msg.className = 'wg-msg'; });
+            input.addEventListener('input', function () { msg.textContent = ''; msg.className = 'wg-msg'; });
             input.addEventListener('keydown', function (e) {
                 if (e.key === 'Enter') { e.preventDefault(); save.click(); }
                 if (e.key === 'Escape') wagaClose();
@@ -267,6 +259,7 @@
                     clearTimeout(timer);
                     packaging = newPackaging;
                     pack.packaging_weight = String(newPackaging);
+                    refresh();
                     save.disabled = false;
                     msg.className = 'wg-msg ok';
                     msg.textContent = 'Zapisano ✓';
