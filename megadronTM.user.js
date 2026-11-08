@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.27
+// @version      1.2.28
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -64,15 +64,15 @@
             var packageId = jsonObject.delivery_packages.packs[0].id;
 
             if (!jsonObject.delivery_packages.packs[0].package_number) {
-                var mydiv;
+                // 5. kolumna wiersza; gdy jej nie ma (np. miniKurier24) – komórka kuriera
+                var mydiv = document.querySelector("#tr_0 > td:nth-child(5)") ||
+                    document.getElementById("deliverer-number-count_" + IAI._orderNumber).closest('td');
                 if (document.querySelector('[title="Paczkomaty InPost Smile"]')) {
-                    mydiv = document.querySelector("#tr_0 > td:nth-child(5)");
                     gabarytKafelki(mydiv, function (letter) {
                         IAI.ajax.post('/panel/ajax/orderd.php', '', 'action=assignBoxToPackage&packageId=' + packageId + '&boxType=' + letter);
                         IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'courierId=' + jsonObject.deliverer_id + '&action=generate&orders[]=' + jsonObject.order_id);
                     });
-                } else if (document.querySelector('[title="Allegro Paczkomaty 24/7 InPost - wszystkie rozmiary"]') || document.querySelector('[title="InPost Paczkomaty 24/7 - wszystkie rozmiary"]')) {
-                    mydiv = document.querySelector("#tr_0 > td:nth-child(5)");
+                } else if (document.querySelector('[title="Allegro Paczkomaty 24/7 InPost - wszystkie rozmiary"]') || document.querySelector('[title="InPost Paczkomaty 24/7 - wszystkie rozmiary"]') || document.querySelector('[title="Allegro miniKurier24 InPost"]')) {
                     var gauge = { A: 'small', B: 'medium', C: 'large' };
                     gabarytKafelki(mydiv, function (letter) {
                         IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'defaultParcelGauge=' + gauge[letter] + '&courierId=' + jsonObject.deliverer_id + '&action=generate&orders[]=' + jsonObject.order_id);
