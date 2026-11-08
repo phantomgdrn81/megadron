@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.28
+// @version      1.2.29
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -73,7 +73,10 @@
                         IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'courierId=' + jsonObject.deliverer_id + '&action=generate&orders[]=' + jsonObject.order_id);
                     });
                 } else if (document.querySelector('[title="Allegro Paczkomaty 24/7 InPost - wszystkie rozmiary"]') || document.querySelector('[title="InPost Paczkomaty 24/7 - wszystkie rozmiary"]') || document.querySelector('[title="Allegro miniKurier24 InPost"]')) {
-                    var gauge = { A: 'small', B: 'medium', C: 'large' };
+                    // miniKurier24 ma w panelu inne wartości gabarytu (letter_a/b/c) niż paczkomaty (small/medium/large)
+                    var gauge = document.querySelector('[title="Allegro miniKurier24 InPost"]')
+                        ? { A: 'letter_a', B: 'letter_b', C: 'letter_c' }
+                        : { A: 'small', B: 'medium', C: 'large' };
                     gabarytKafelki(mydiv, function (letter) {
                         IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'defaultParcelGauge=' + gauge[letter] + '&courierId=' + jsonObject.deliverer_id + '&action=generate&orders[]=' + jsonObject.order_id);
                     });
