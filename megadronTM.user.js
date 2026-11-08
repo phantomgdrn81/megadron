@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.29
+// @version      1.2.30
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -72,11 +72,14 @@
                         IAI.ajax.post('/panel/ajax/orderd.php', '', 'action=assignBoxToPackage&packageId=' + packageId + '&boxType=' + letter);
                         IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'courierId=' + jsonObject.deliverer_id + '&action=generate&orders[]=' + jsonObject.order_id);
                     });
-                } else if (document.querySelector('[title="Allegro Paczkomaty 24/7 InPost - wszystkie rozmiary"]') || document.querySelector('[title="InPost Paczkomaty 24/7 - wszystkie rozmiary"]') || document.querySelector('[title="Allegro miniKurier24 InPost"]')) {
-                    // miniKurier24 ma w panelu inne wartości gabarytu (letter_a/b/c) niż paczkomaty (small/medium/large)
-                    var gauge = document.querySelector('[title="Allegro miniKurier24 InPost"]')
-                        ? { A: 'letter_a', B: 'letter_b', C: 'letter_c' }
-                        : { A: 'small', B: 'medium', C: 'large' };
+                } else if (document.querySelector('[title="Allegro miniKurier24 InPost"]')) {
+                    // miniKurier24: samo zapytanie nie przypisuje gabarytu – robimy to przez okienko panelu
+                    // „Generowanie przesyłek i wydruków”: ustawiamy gabaryt (letter_a/b/c) i klikamy „Generuj”
+                    gabarytKafelki(mydiv, function (letter) {
+                        generujPrzezOkienko('letter_' + letter.toLowerCase());
+                    });
+                } else if (document.querySelector('[title="Allegro Paczkomaty 24/7 InPost - wszystkie rozmiary"]') || document.querySelector('[title="InPost Paczkomaty 24/7 - wszystkie rozmiary"]')) {
+                    var gauge = { A: 'small', B: 'medium', C: 'large' };
                     gabarytKafelki(mydiv, function (letter) {
                         IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'defaultParcelGauge=' + gauge[letter] + '&courierId=' + jsonObject.deliverer_id + '&action=generate&orders[]=' + jsonObject.order_id);
                     });
@@ -86,6 +89,27 @@
             }
             var badDivs = $("#msg_line_msg");
             badDivs.remove();
+        }
+
+        // Otwiera okienko „Generowanie przesyłek i wydruków dla kuriera”, wybiera gabaryt i zatwierdza
+        function generujPrzezOkienko(gaugeValue) {
+            var link = document.querySelector('.generateNumber22') ||
+                [...document.querySelectorAll('a')].find(function (a) { return /Generowanie przesyłek i wydruków/.test(a.textContent); });
+            if (!link) return;
+            link.click();
+            var start = Date.now();
+            (function czekaj() {
+                var sel = document.getElementById('fg_defaultParcelGauge');
+                if (sel && sel.offsetParent && [...sel.options].some(function (o) { return o.value === gaugeValue; })) {
+                    sel.value = gaugeValue;
+                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                    var form = sel.closest('form');
+                    var submit = form && [...form.elements].find(function (e) { return e.type === 'submit'; });
+                    if (submit) submit.click();
+                    return;
+                }
+                if (Date.now() - start < 10000) setTimeout(czekaj, 200);
+            })();
         }
     }
 
