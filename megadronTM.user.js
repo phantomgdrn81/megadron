@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.25
+// @version      1.2.26
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1223,13 +1223,18 @@
             [/słoweni/i, 'SI'], [/chorwacj/i, 'HR'], [/belgi/i, 'BE'], [/franc/i, 'FR'], [/włoch/i, 'IT'], [/hiszpani/i, 'ES'],
         ];
 
-        // Allegro: sam przewoźnik (DHL, DPD, Orlen Paczka, One Kurier, InPost, Packeta).
+        // Allegro: sam przewoźnik (DHL, DPD, Orlen Paczka, One Kurier, InPost, Pocztex); Packeta w Allegro = Orlen Paczka.
         // Pozostali: przewoźnik + rodzaj (Automat / Punkt / Kurier / Paczkomat) + kraj dla zagranicznych
         function getCourierLabel(name) {
             const n = name.replace(/\s*\(Polska\)\s*$/i, '').trim();
+            if (/^Allegro\b/i.test(n) && /pocztex/i.test(n)) return 'Pocztex';
             const courier = allegroCourierMap.find(c => c.match.test(n));
             if (!courier) return n.replace(/^Allegro\s+/i, '');
-            if (/^Allegro\b/i.test(n)) return courier.label;
+            if (/^Allegro\b/i.test(n)) {
+                if (courier.label === 'Packeta') return 'Orlen Paczka';
+                if (courier.label === 'One Kurier') return 'One\nKurier';   // zawijane w dwie linie
+                return courier.label;
+            }
 
             let type;
             if (courier.label === 'InPost') type = /paczkomat|automat|wszystkie rozmiary/i.test(n) ? 'Paczkomat' : 'Kurier';
@@ -1267,7 +1272,7 @@
                 label.style.lineHeight = '1.3';
                 label.style.marginTop = '4px';
                 label.style.color = '#333';
-                label.style.whiteSpace = 'normal';
+                label.style.whiteSpace = 'pre-line';   // „\n” w podpisie = nowa linia
                 parent.appendChild(label);
             });
         }
