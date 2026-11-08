@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.20
+// @version      1.2.21
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -64,25 +64,262 @@
             var packageId = jsonObject.delivery_packages.packs[0].id;
 
             if (!jsonObject.delivery_packages.packs[0].package_number) {
-                var mydiv, newDiv;
+                var mydiv;
                 if (document.querySelector('[title="Paczkomaty InPost Smile"]')) {
                     mydiv = document.querySelector("#tr_0 > td:nth-child(5)");
-                    newDiv = "<br/><div id=\"wyborGabarytu\"><input type=\"button\" value=\"Gabaryt A\" onclick=\"IAI.ajax.post('/panel/ajax/orderd.php', '', 'action=assignBoxToPackage&packageId=" + packageId + "&boxType=A'); IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'courierId=" + jsonObject.deliverer_id + "&action=generate&orders[]=" + jsonObject.order_id + "'); $('#wyborGabarytu').html('<br/><b>Przypisano gabaryt A!</b>'); document.querySelector('#fg_code').focus();\" style=\"margin-top:20px; height:50px; font-size:15px; border-radius: 3px\" class=\"btn btn-sm btn-success formbutton\">";
-                    newDiv += "<input type=\"button\" value=\"Gabaryt B\" onclick=\"IAI.ajax.post('/panel/ajax/orderd.php', '', 'action=assignBoxToPackage&packageId=" + packageId + "&boxType=B'); IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'courierId=" + jsonObject.deliverer_id + "&action=generate&orders[]=" + jsonObject.order_id + "'); $('#wyborGabarytu').html('<br/><b>Przypisano gabaryt B!</b>'); document.querySelector('#fg_code').focus();\" style=\"margin-top:20px; height:50px; font-size:15px; border-radius: 3px\" class=\"btn btn-sm btn-warning formbutton\">";
-                    newDiv += "<input type=\"button\" value=\"Gabaryt C\" onclick=\"IAI.ajax.post('/panel/ajax/orderd.php', '', 'action=assignBoxToPackage&packageId=" + packageId + "&boxType=C'); IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'courierId=" + jsonObject.deliverer_id + "&action=generate&orders[]=" + jsonObject.order_id + "'); $('#wyborGabarytu').html('<br/><b>Przypisano gabaryt C!</b>'); document.querySelector('#fg_code').focus();\" style=\"margin-top:20px; height:50px; font-size:15px; border-radius: 3px\" class=\"btn btn-sm btn-danger formbutton\"></div>";
-                    mydiv.innerHTML += newDiv;
+                    gabarytKafelki(mydiv, function (letter) {
+                        IAI.ajax.post('/panel/ajax/orderd.php', '', 'action=assignBoxToPackage&packageId=' + packageId + '&boxType=' + letter);
+                        IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'courierId=' + jsonObject.deliverer_id + '&action=generate&orders[]=' + jsonObject.order_id);
+                    });
                 } else if (document.querySelector('[title="Allegro Paczkomaty 24/7 InPost - wszystkie rozmiary"]') || document.querySelector('[title="InPost Paczkomaty 24/7 - wszystkie rozmiary"]')) {
                     mydiv = document.querySelector("#tr_0 > td:nth-child(5)");
-                    newDiv = "<br/><div id=\"wyborGabarytu\"><input type=\"button\" value=\"Gabaryt A\" onclick=\"IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'defaultParcelGauge=small&courierId=" + jsonObject.deliverer_id + "&action=generate&orders[]=" + jsonObject.order_id + "'); $('#wyborGabarytu').html('<br/><b>Przypisano gabaryt A!</b>'); document.querySelector('#fg_code').focus();\" style=\"margin-top:20px; height:50px; font-size:15px; border-radius: 3px\" class=\"btn btn-sm btn-success formbutton\">";
-                    newDiv += "<input type=\"button\" value=\"Gabaryt B\" onclick=\"IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'defaultParcelGauge=medium&courierId=" + jsonObject.deliverer_id + "&action=generate&orders[]=" + jsonObject.order_id + "'); $('#wyborGabarytu').html('<br/><b>Przypisano gabaryt B!</b>'); document.querySelector('#fg_code').focus();\" style=\"margin-top:20px; height:50px; font-size:15px; border-radius: 3px\" class=\"btn btn-sm btn-warning formbutton\">";
-                    newDiv += "<input type=\"button\" value=\"Gabaryt C\" onclick=\"IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'defaultParcelGauge=large&courierId=" + jsonObject.deliverer_id + "&action=generate&orders[]=" + jsonObject.order_id + "'); $('#wyborGabarytu').html('<br/><b>Przypisano gabaryt C!</b>'); document.querySelector('#fg_code').focus();\" style=\"margin-top:20px; height:50px; font-size:15px; border-radius: 3px\" class=\"btn btn-sm btn-danger formbutton\">";
-                    mydiv.innerHTML += newDiv;
+                    var gauge = { A: 'small', B: 'medium', C: 'large' };
+                    gabarytKafelki(mydiv, function (letter) {
+                        IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'defaultParcelGauge=' + gauge[letter] + '&courierId=' + jsonObject.deliverer_id + '&action=generate&orders[]=' + jsonObject.order_id);
+                    });
                 } else if (!/^Allegro\b/i.test(jsonObject.deliverer_name || '')) {
                     IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'courierId=' + jsonObject.deliverer_id + '&action=generate&orders[]=' + jsonObject.order_id);
                 }
             }
             var badDivs = $("#msg_line_msg");
             badDivs.remove();
+        }
+
+        // Kafelki A/B/C (wymiary paczkomatu). Pasek .gb-top nad nimi zostaje na dodatki (np. zębatka wagi).
+        var GB_KAFELKI = [
+            { letter: 'A', dims: '8×38×64 cm', color: '#2e9d57', light: '#6cc68f', dark: '#217a42', tint: '#eef8f1' },
+            { letter: 'B', dims: '19×38×64 cm', color: '#e6b000', light: '#f6d35a', dark: '#b88a00', tint: '#fff8e1' },
+            { letter: 'C', dims: '41×38×64 cm', color: '#c0392b', light: '#e0786c', dark: '#922b20', tint: '#fdeeee' },
+        ];
+
+        function gabarytKafelki(mydiv, onPick) {
+            if (!mydiv || document.getElementById('wyborGabarytu')) return;
+            if (!document.getElementById('gbStyle')) {
+                var st = document.createElement('style');
+                st.id = 'gbStyle';
+                st.textContent =
+                    '#wyborGabarytu{margin-top:12px;text-align:left}' +
+                    '#wyborGabarytu .gb-top{display:flex;justify-content:flex-end;align-items:center;min-height:18px;margin-bottom:4px}' +
+                    '#wyborGabarytu .gb-row{display:flex;gap:6px}' +
+                    '#wyborGabarytu .gb-tile{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 4px 7px;background:#fff;border:2px solid var(--gb);border-radius:8px;cursor:pointer;font-family:inherit;line-height:1.2;transition:background .12s,transform .12s,box-shadow .12s}' +
+                    '#wyborGabarytu .gb-tile:hover{background:var(--gb-tint);box-shadow:0 2px 6px rgba(0,0,0,.12);transform:translateY(-1px)}' +
+                    '#wyborGabarytu .gb-tile:active{transform:translateY(1px);box-shadow:none}' +
+                    '#wyborGabarytu .gb-tile svg{width:26px;height:26px;margin-bottom:2px}' +
+                    '#wyborGabarytu .gb-name{font-size:15px;font-weight:700;color:#222;white-space:nowrap}' +
+                    '#wyborGabarytu .gb-dims{font-size:12px;color:#555;white-space:nowrap}';
+                document.head.appendChild(st);
+            }
+
+            var wrap = document.createElement('div');
+            wrap.id = 'wyborGabarytu';
+            wrap.innerHTML = '<div class="gb-top"></div><div class="gb-row"></div>';
+            var row = wrap.querySelector('.gb-row');
+
+            GB_KAFELKI.forEach(function (g) {
+                var btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'gb-tile';
+                btn.style.setProperty('--gb', g.color);
+                btn.style.setProperty('--gb-tint', g.tint);
+                btn.innerHTML =
+                    '<svg viewBox="0 0 32 32" aria-hidden="true">' +
+                    '<path d="M16 3 4 8.5v15L16 29l12-5.5v-15z" fill="' + g.color + '"/>' +
+                    '<path d="M16 3 4 8.5 16 14l12-5.5z" fill="' + g.light + '"/>' +
+                    '<path d="M16 14v15L4 23.5v-15z" fill="' + g.dark + '"/>' +
+                    '<path d="M10 5.7 22 11.2v4.3l-3 1.4v-4.3L7 7.1z" fill="#fff" opacity=".55"/>' +
+                    '</svg>' +
+                    '<span class="gb-name">Gabaryt ' + g.letter + '</span>' +
+                    '<span class="gb-dims">' + g.dims + '</span>';
+                btn.addEventListener('click', function () {
+                    onPick(g.letter);
+                    wrap.innerHTML = '<br/><b>Przypisano gabaryt ' + g.letter + '!</b>';
+                    var fgCode = document.querySelector('#fg_code');
+                    if (fgCode) fgCode.focus();
+                });
+                row.appendChild(btn);
+            });
+
+            mydiv.appendChild(wrap);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // WAGA PACZKI – ZĘBATKA NAD GABARYTAMI
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (url.includes('/panel/order-verification.php')) {
+
+        window.addEventListener("load", () => {
+            [0, 300, 800, 1500, 3000].forEach(d => setTimeout(addWagaGear, d));
+        });
+
+        // Dane paczki z tego samego JSON-a co guziki gabarytów
+        function wagaPackage() {
+            var el = document.getElementById("deliverer-number-count_" + IAI._orderNumber);
+            if (!el) return null;
+            try {
+                var json = JSON.parse(el.getAttribute("onclick").replace('show_packages_edit_toplayer(event,', '').replace(/\)\s*$/, ''));
+                return json.delivery_packages.packs[0];
+            } catch (e) { return null; }
+        }
+
+        function addWagaGear() {
+            var top = document.querySelector('#wyborGabarytu .gb-top');
+            if (!top || top.querySelector('.wg-gear')) return;
+            var pack = wagaPackage();
+            if (!pack) return;
+
+            if (!document.getElementById('wgStyle')) {
+                var st = document.createElement('style');
+                st.id = 'wgStyle';
+                st.textContent =
+                    '.wg-gear{border:0;background:none;color:#8a9097;font-size:15px;line-height:1;padding:2px 4px;border-radius:4px;cursor:pointer}' +
+                    '.wg-gear:hover,.wg-gear.on{color:#333;background:#eef0f3}' +
+                    '.wg-pop{position:absolute;z-index:10000;width:220px;background:#fff;border:1px solid #dde1e6;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:12px;font-size:12px;text-align:left}' +
+                    '.wg-pop .wg-h{font-size:13px;font-weight:600;color:#222;margin-bottom:8px}' +
+                    '.wg-pop .wg-f{display:flex;align-items:center;gap:6px}' +
+                    '.wg-pop input{width:90px;height:28px;padding:2px 8px;font-size:14px;font-weight:600;border:1px solid #ccd2d8;border-radius:6px}' +
+                    '.wg-pop .wg-u{color:#555}' +
+                    '.wg-pop .wg-info{color:#777;margin:6px 0 10px}' +
+                    '.wg-pop .wg-save{width:100%;height:30px;border:0;border-radius:6px;background:#3a3d42;color:#fff;font-weight:600;cursor:pointer}' +
+                    '.wg-pop .wg-save:hover{background:#2b2e32}' +
+                    '.wg-pop .wg-save:disabled{opacity:.6;cursor:wait}' +
+                    '.wg-pop .wg-msg{margin-top:6px;min-height:14px;font-weight:600}' +
+                    '.wg-pop .wg-msg.ok{color:#2e7d32}.wg-pop .wg-msg.err{color:#c62828}';
+                document.head.appendChild(st);
+            }
+
+            var gear = document.createElement('button');
+            gear.type = 'button';
+            gear.className = 'wg-gear';
+            gear.title = 'Zmień wagę paczki';
+            gear.textContent = '⚙';
+            gear.addEventListener('click', function (e) {
+                e.stopPropagation();
+                if (document.querySelector('.wg-pop')) return wagaClose();
+                wagaOpen(gear, pack);
+            });
+            top.appendChild(gear);
+        }
+
+        function wagaClose() {
+            var pop = document.querySelector('.wg-pop');
+            if (pop) pop.remove();
+            var gear = document.querySelector('.wg-gear');
+            if (gear) gear.classList.remove('on');
+            document.removeEventListener('mousedown', wagaOutside);
+        }
+        function wagaOutside(e) {
+            if (!e.target.closest('.wg-pop, .wg-gear')) wagaClose();
+        }
+
+        // Jak na stronie zamówienia: wpisujemy wagę całej paczki, opakowanie = całość − produkty
+        function wagaOpen(gear, pack) {
+            var products = parseInt(pack.products_weight, 10) || 0;
+            var packaging = parseInt(pack.packaging_weight, 10) || 0;
+
+            var pop = document.createElement('div');
+            pop.className = 'wg-pop';
+            pop.innerHTML =
+                '<div class="wg-h">Waga paczki</div>' +
+                '<div class="wg-f"><input type="number" min="0" step="1"><span class="wg-u">g</span></div>' +
+                '<div class="wg-info"></div>' +
+                '<button type="button" class="wg-save">Zapisz</button>' +
+                '<div class="wg-msg"></div>';
+            var input = pop.querySelector('input');
+            var info = pop.querySelector('.wg-info');
+            var save = pop.querySelector('.wg-save');
+            var msg = pop.querySelector('.wg-msg');
+
+            var refresh = function () {
+                var total = parseInt(input.value, 10) || 0;
+                info.textContent = 'produkty ' + products + ' g + opakowanie ' + (total - products) + ' g';
+            };
+            input.value = products + packaging;
+            refresh();
+            input.addEventListener('input', function () { refresh(); msg.textContent = ''; msg.className = 'wg-msg'; });
+            input.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') { e.preventDefault(); save.click(); }
+                if (e.key === 'Escape') wagaClose();
+            });
+
+            save.addEventListener('click', function () {
+                if (input.value === '' || !(parseInt(input.value, 10) >= 0)) { input.focus(); return; }
+                var newPackaging = parseInt(input.value, 10) - products;
+                save.disabled = true;
+                msg.className = 'wg-msg';
+                msg.textContent = 'Zapisywanie…';
+                var request = new IAI.ajax.request({
+                    method: 'POST',
+                    gate: '/panel/ajax/shipment.php',
+                    params: 'action=savePackagesWeights&eventId=' + pack.event_id + '&eventType=' + pack.event_type +
+                        '&packageIds[]=' + pack.id +
+                        '&productsWeights[' + pack.id + ']=' + products +
+                        '&packagingWeights[' + pack.id + ']=' + newPackaging,
+                    sync: false,
+                });
+                var timer = setTimeout(function () {
+                    save.disabled = false;
+                    msg.className = 'wg-msg err';
+                    msg.textContent = 'Brak potwierdzenia zapisu';
+                }, 10000);
+                request.onSuccess = function () {
+                    clearTimeout(timer);
+                    packaging = newPackaging;
+                    pack.packaging_weight = String(newPackaging);
+                    save.disabled = false;
+                    msg.className = 'wg-msg ok';
+                    msg.textContent = 'Zapisano ✓';
+                };
+                request.makeRequest();
+            });
+
+            document.body.appendChild(pop);
+            var r = gear.getBoundingClientRect();
+            pop.style.top = (r.bottom + window.scrollY + 6) + 'px';
+            pop.style.left = Math.max(6, r.right + window.scrollX - pop.offsetWidth) + 'px';
+            gear.classList.add('on');
+            document.addEventListener('mousedown', wagaOutside);
+            input.focus();
+            input.select();
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // WARTOŚĆ ZAMÓWIENIA PRZY PŁATNOŚCI
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (url.includes('/panel/order-verification.php')) {
+
+        window.addEventListener("load", () => {
+            [0, 500, 1500, 3000].forEach(d => setTimeout(addWartoscZamowienia, d));
+        });
+
+        function addWartoscZamowienia() {
+            if (document.querySelector('.tm-order-value')) return;
+            var od = IAI && IAI._orderdata;
+            if (!od || od.currency_sum == null) return;
+            var row = [...document.querySelectorAll('tr')].find(function (tr) {
+                return tr.cells.length >= 2 && /Sposób płatności/i.test(tr.cells[0].textContent);
+            });
+            if (!row) return;
+
+            var currency = od.order_currency || od.currency || 'PLN';
+            var amount = parseFloat(od.currency_sum);
+            var text;
+            try {
+                text = new Intl.NumberFormat('pl-PL', { style: 'currency', currency: currency }).format(amount);
+            } catch (e) {
+                text = amount.toFixed(2).replace('.', ',') + ' ' + currency;
+            }
+
+            var pill = document.createElement('div');
+            pill.className = 'tm-order-value';
+            pill.title = 'Wartość zamówienia';
+            pill.style.cssText = 'display:inline-block;margin:2px 0 0 8px;padding:2px 9px;border-radius:10px;background:#eef0f3;color:#333;font-size:12px;font-weight:600;white-space:nowrap';
+            pill.textContent = text;
+            var cell = row.cells[1];
+            (cell.querySelector('.text') || cell).appendChild(pill);
         }
     }
 
