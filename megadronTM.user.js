@@ -374,6 +374,7 @@
                 'Allegro One Box (One Kurier)',
                 'Allegro One Box (DPD)',
                 'Allegro One Kurier - dostawa na jutro',
+                'Allegro kurier DPD (Polska)',
             ];
 
             var matchedTitle = GB_COURIER_TITLES.find(function (title) {
