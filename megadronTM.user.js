@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.32
+// @version      1.2.33
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -422,7 +422,7 @@
 
 
     // ════════════════════════════════════════════════════════════════════════
-    // KARTONY – ALLEGRO ZAGRANICZNE (wpisywane wymiary)
+    // KARTONY – ALLEGRO (wpisywane wymiary)
     // ════════════════════════════════════════════════════════════════════════
 
     if (url.includes('/panel/order-verification.php')) {
@@ -444,17 +444,9 @@
             return tr ? tr.cells[1].textContent.replace(/\s+/g, ' ').trim() : '';
         }
 
-        function isForeignAllegro(link) {
-            if (!/^Allegro/i.test(rowText('Kurier'))) return false;
-            if (/allegro\.(?!pl\b)[a-z]{2}\b/i.test(rowText('Źródło zamówienia'))) return true;
-            const table = link.closest('table');
-            if (!table) return false;
-            const flags = [...table.querySelectorAll('img')]
-                .map(i => (i.getAttribute('src') || '').match(/(?:^|\/)([a-z]{2})\.png$/i))
-                .filter(Boolean).map(m => m[1].toLowerCase());
-            if (flags.some(cc => cc !== 'pl')) return true;
-            const countries = (table.rows[2]?.cells[1]?.textContent || '').match(/\(([^()]+)\)/g) || [];
-            return countries.some(c => !/Polska/i.test(c));
+        // Każde zamówienie z kurierem Allegro – polskie i zagraniczne
+        function isAllegro() {
+            return /^Allegro/i.test(rowText('Kurier'));
         }
 
         function waitFor(fn, timeout = 10000) {
@@ -874,7 +866,7 @@
             const link = kq('a.generateNumber22');
             if (!link || kq('.krb-card')) return;
             const td = link.closest('td');
-            if (!td || !/Nie wygenerowano numeru/i.test(td.textContent) || !isForeignAllegro(link)) return;
+            if (!td || !/Nie wygenerowano numeru/i.test(td.textContent) || !isAllegro()) return;
 
             injectStyles();
             const card = document.createElement('div');
@@ -916,7 +908,6 @@
             }
         });
     }
-
 
     // ════════════════════════════════════════════════════════════════════════
     // STAN M1 PRZY PAKOWANIU
