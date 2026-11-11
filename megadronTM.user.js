@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.33
+// @version      1.2.34
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -14,6 +14,7 @@
 // @grant        GM_addStyle
 // @connect      client6220.idosell.com
 // @connect      edge.salescenter.allegro.com
+// @connect      192.168.0.200
 // @run-at       document-start
 // @updateURL    https://raw.githubusercontent.com/phantomgdrn81/megadron/refs/heads/main/megadronTM.user.js
 // @downloadURL  https://raw.githubusercontent.com/phantomgdrn81/megadron/refs/heads/main/megadronTM.user.js
@@ -913,7 +914,18 @@
     // STAN M1 PRZY PAKOWANIU
     // ════════════════════════════════════════════════════════════════════════
 
-    if (url.includes('/panel/order-verification.php')) {
+    if (url.includes('/panel/app/order-verification.php')) {
+
+        const CODEM0 = 'http://192.168.0.200:3100';
+        const BADGE_CSS = `margin-top:4px;padding:2px 8px;border-radius:4px;font-size:12px;display:inline-block;
+            background:#FDF5E6;border:1px solid #D2B48C;color:#721c24;`;
+
+        GM_addStyle(`
+            .m1-dlv { color:#15803d; font-weight:600; margin-left:4px; }
+            .m1-dlv-btn { border:0; background:none; padding:0 2px; margin-left:2px; cursor:pointer; color:#15803d; font-size:11px; line-height:1; }
+            .m1-dlv-list { display:none; margin:3px 0 1px; padding-left:14px; color:#15803d; font-weight:600; }
+            .m1-dlv-list.open { display:block; }
+        `);
 
         function fetchM1(idt, callback) {
             GM_xmlhttpRequest({
@@ -927,15 +939,11 @@
                 data: `id=stocksQuantity&url=/panel/ajax/product-edit-aceform-tables.php%3Fname%3Dquantity%26idt%3D${idt}%26filtered%3Dfalse`,
                 onload: function (response) {
                     try {
-                        const parser = new DOMParser();
-                        const doc = parser.parseFromString(response.responseText, 'text/html');
-                        const allRows = doc.querySelectorAll('table tbody tr');
+                        const doc = new DOMParser().parseFromString(response.responseText, 'text/html');
                         let row = null;
-                        allRows.forEach(r => {
+                        doc.querySelectorAll('table tbody tr').forEach(r => {
                             const cells = r.querySelectorAll('td');
-                            if (!row && cells.length >= 2 && cells[1].textContent.trim() !== '' && cells[1].textContent.trim() !== '-') {
-                                row = r;
-                            }
+                            if (!row && cells.length >= 2 && cells[1].textContent.trim() !== '' && cells[1].textContent.trim() !== '-') row = r;
                         });
                         if (!row) { callback(null); return; }
                         const cells = row.querySelectorAll('td');
@@ -948,36 +956,91 @@
             });
         }
 
-        function makeBadgeM1(m1) {
-            const qty = parseInt(m1, 10);
-            if (m1 === null) {
-            }
-            let displayM1 = m1 !== null ? m1 : '-';
-            if (m1 === 'jest') {
-                displayM1 = "<i> elektronicznie </i>";
-            }
+        const dlvCache = {};
+        const dlvWaiting = {};
+        let dlvTimer = null;
 
-            if (qty === 0 || m1 === '0') {
-                displayM1 = 'BRAK';
-            }
+        function fetchDeliveries(idt, callback) {
+            if (dlvCache[idt]) { callback(dlvCache[idt]); return; }
+            (dlvWaiting[idt] = dlvWaiting[idt] || []).push(callback);
+            clearTimeout(dlvTimer);
+            dlvTimer = setTimeout(sendDeliveries, 300);
+        }
+
+        function sendDeliveries() {
+            const waiting = Object.assign({}, dlvWaiting);
+            Object.keys(dlvWaiting).forEach(k => delete dlvWaiting[k]);
+            const ids = Object.keys(waiting);
+            if (!ids.length) return;
+            const done = (data) => ids.forEach(id => {
+                dlvCache[id] = (data && data[id]) || [];
+                waiting[id].forEach(cb => cb(dlvCache[id]));
+            });
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: `${CODEM0}/api/m1-deliveries?ids=${ids.join(',')}`,
+                timeout: 15000,
+                onload: (r) => { try { done(JSON.parse(r.responseText).deliveries); } catch (e) { done(null); } },
+                onerror: () => done(null),
+                ontimeout: () => done(null),
+            });
+        }
+
+        function dayLabel(date) {
+            const d = new Date(date.replace(' ', 'T'));
+            const today = new Date(); today.setHours(0, 0, 0, 0);
+            const day = new Date(d); day.setHours(0, 0, 0, 0);
+            const diff = Math.round((today - day) / 86400000);
+            if (diff === 0) return 'dzisiaj';
+            if (diff === 1) return 'wczoraj';
+            return String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0');
+        }
+
+        const dlvText = (x) => `+${x.qty} szt. ${dayLabel(x.date)}`;
+        const dlvTitle = (x) => `${x.type} ${x.doc}, ${x.date.slice(0, 16)}`;
+
+        function addDeliveries(badge, list) {
+            if (!list.length) return;
+            const first = document.createElement('span');
+            first.className = 'm1-dlv';
+            first.textContent = `(${dlvText(list[0])})`;
+            first.title = dlvTitle(list[0]);
+            badge.appendChild(first);
+            if (list.length < 2) return;
+
+            const more = document.createElement('div');
+            more.className = 'm1-dlv-list';
+            list.slice(1).forEach(x => {
+                const li = document.createElement('div');
+                li.textContent = dlvText(x);
+                li.title = dlvTitle(x);
+                more.appendChild(li);
+            });
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'm1-dlv-btn';
+            btn.textContent = '▾';
+            btn.title = 'Wcześniejsze dostawy na M1 (3 dni)';
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                btn.textContent = more.classList.toggle('open') ? '▴' : '▾';
+            });
+            badge.append(btn, more);
+        }
+
+        function makeBadgeM1(m1, idt) {
+            let displayM1 = m1 !== null ? m1 : '-';
+            if (m1 === 'jest') displayM1 = '<i> elektronicznie </i>';
+            if (parseInt(m1, 10) === 0 || m1 === '0') displayM1 = 'BRAK';
 
             const d = document.createElement('div');
             d.className = 'm1-stock-badge';
-            d.style.cssText = `
-            margin-top:4px;
-            padding:2px 8px;
-            border-radius:4px;
-            font-size:12px;
-            display:inline-block;
-            background:#FDF5E6;
-            border:1px solid #D2B48C;
-            color:#721c24;
-            `;
-
+            d.style.cssText = BADGE_CSS;
             d.innerHTML = `📦 M1: <strong>${displayM1}</strong>`;
+            fetchDeliveries(idt, (list) => addDeliveries(d, list));
             return d;
         }
-
 
         function processLinksM1() {
             document.querySelectorAll('a[onclick*="showProductInfo"]').forEach(a => {
@@ -989,36 +1052,24 @@
                 const idt = match[1];
 
                 const tr = a.closest('tr');
-                if (!tr) return;
-
-                const nameTd = tr.querySelector('td[class*="col-name"]');
+                const nameTd = tr && tr.querySelector('td[class*="col-name"]');
                 if (!nameTd) return;
 
                 let lokalizacjeP = null;
                 nameTd.querySelectorAll('p').forEach(p => {
-                    if (!lokalizacjeP && p.textContent.includes('Lokalizacje:')) {
-                        lokalizacjeP = p;
-                    }
+                    if (!lokalizacjeP && p.textContent.includes('Lokalizacje:')) lokalizacjeP = p;
                 });
                 if (!lokalizacjeP) return;
                 if (lokalizacjeP.parentElement.querySelector('.m1-stock-badge')) return;
 
                 const placeholder = document.createElement('div');
                 placeholder.className = 'm1-stock-badge';
-                placeholder.style.cssText = `
-                margin-top:4px;
-                padding:2px 8px;
-                border-radius:4px;
-                font-size:12px;
-                display:inline-block;
-                background:#FDF5E6;
-                border:1px solid #D2B48C;
-                color:#721c24;`;
+                placeholder.style.cssText = BADGE_CSS;
                 placeholder.innerHTML = '📦 M1: <strong>ładowanie…</strong>';
                 lokalizacjeP.insertAdjacentElement('afterend', placeholder);
 
                 fetchM1(idt, function (m1) {
-                    placeholder.replaceWith(makeBadgeM1(m1));
+                    placeholder.replaceWith(makeBadgeM1(m1, idt));
                 });
             });
         }
