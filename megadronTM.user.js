@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.35
+// @version      1.2.37
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1938,6 +1938,24 @@ if (url.includes('megadron.pl/pl/products')) {
           };
           const viaApi = (code) => !CUSTOM[code] && !!(API_STATUS[code] || code === 'wn');
 
+          // Pozycje spoza statusów zamówień: liczby z widżetu „Monitor” pulpitu panelu
+          // (POST /panel/api/panel/monitor/getMonitorStats – jedno lekkie zapytanie dla wszystkich).
+          const MONITOR_URL = '/panel/api/panel/monitor/getMonitorStats';
+          const EXTRA = [
+            { code: 'rma:na', name: 'Niezaakceptowane reklamacje', icon: 'assignment_late', group: 'orders', key: 'notAcceptedRMA', page: 'rma.php', params: { action: 'search', show: 'na' } },
+            { code: 'rma:o', name: 'Niezrealizowane reklamacje', icon: 'assignment', group: 'orders', key: 'unfinishedRma', page: 'rma.php', params: { action: 'search', show: 'o' } },
+            { code: 'rma:chat', name: 'Nieodczytane wiadomości – czat reklamacji', icon: 'mark_chat_unread', group: 'orders', key: 'newMsgInRmaChat', page: 'rma.php', params: { action: 'search', newRmaChatMsg: '1' } },
+            { code: 'ret:o', name: 'Niezrealizowane zwroty', icon: 'assignment_return', group: 'orders', key: 'unfinishedReturns', page: 'returns.php', params: { action: 'search', show: 'o' } },
+            { code: 'faq:new', name: 'Pytania do towarów bez odpowiedzi', icon: 'contact_support', group: 'moderator', key: 'productQuestions', page: 'products-faq.php', params: { search: 'new_questions' } },
+          ];
+          const extraOf = (c) => EXTRA.find((x) => x.code === c) || null;
+          const hrefOf = (c) => {
+            const x = extraOf(c);
+            if (x) return '/panel/app/' + x.page + '?' + new URLSearchParams(x.params).toString();
+            if (CUSTOM[c]) return CUSTOM[c].href;
+            return '/panel/app/orders-list.php?status=' + encodeURIComponent(c);
+          };
+
           // Kolory statusów: panel definiuje zmienne CSS --color-status-<nazwa> (te same co na liście zamówień).
           const COLOR_NAME = {
             n: 'new', o: 'on_order', b: 'packed', br: 'packed_ready', p: 'ready', w: 'payment_waiting',
@@ -2001,6 +2019,8 @@ if (url.includes('megadron.pl/pl/products')) {
             .tm-md input.tm-key{padding:6px 8px;border:1px solid #d6d6db;border-radius:6px;font:inherit;-webkit-text-security:disc;text-security:disc}
             .tm-md-list{overflow:auto;padding:0 16px;flex:1;min-height:120px}
             .tm-md-list label{display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer}
+            .tm-md-list .tm-grp{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:#888;padding:10px 0 2px}
+            .tm-md-list .tm-grp:first-child{padding-top:2px}
             .tm-md-list label.tm-sub{padding-left:22px;color:#555}
             .tm-md-list label code{margin-left:auto;font-size:11px;color:#999}
             .tm-md-f{border-top:1px solid #eee;padding:10px 16px 14px;display:flex;flex-direction:column;gap:10px}
@@ -2105,8 +2125,42 @@ if (url.includes('megadron.pl/pl/products')) {
             return n;
           }
 
+          // Jedno zapytanie o wszystkie widoczne pozycje dodatkowe (reklamacje, zwroty, pytania).
+          async function refreshExtras(codes) {
+            const items = codes.map(extraOf).filter(Boolean);
+            if (!items.length) return;
+            const groups = [...new Set(items.map((x) => x.group))];
+            const t0 = performance.now();
+            try {
+              const r = await fetch(MONITOR_URL, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({ monitorFilter: { requestedData: groups } }),
+              });
+              if (!r.ok) throw new Error('HTTP ' + r.status);
+              const j = await r.json();
+              if (j.isError || !j.data) throw new Error((j.errors && j.errors[0] && j.errors[0].message) || 'brak danych');
+              const ms = Math.round(performance.now() - t0);
+              items.forEach((x) => {
+                const n = parseInt((j.data[x.group] || {})[x.key], 10);
+                if (isNaN(n)) { errors[x.code] = 'brak pola ' + x.key; return; }
+                counts[x.code] = n;
+                meta[x.code] = { n, src: 'monitor panelu', ms };
+                fresh[x.code] = true;
+                delete errors[x.code];
+              });
+              save('counts', counts);
+            } catch (e) {
+              items.forEach((x) => { errors[x.code] = e.message || String(e); });
+            }
+            items.forEach((x) => updateBadge(x.code));
+          }
+
           async function refreshCounts(codes) {
-            const todo = codes.filter((c) => !fresh[c]);
+            const pending = codes.filter((c) => !fresh[c]);
+            const todo = pending.filter((c) => !extraOf(c));
+            const extraJob = refreshExtras(pending.filter(extraOf));
             const useApi = (c) => !!(apiKey && viaApi(c));
             const apiQ = todo.filter(useApi);
             const panelQ = todo.filter((c) => !useApi(c));
@@ -2127,6 +2181,7 @@ if (url.includes('megadron.pl/pl/products')) {
               }
             };
             await Promise.all([
+              extraJob,
               ...Array.from({ length: API_CONCURRENCY }, worker(apiQ)),
               ...Array.from({ length: PANEL_CONCURRENCY }, worker(panelQ)),
             ]);
@@ -2134,8 +2189,26 @@ if (url.includes('megadron.pl/pl/products')) {
 
           // ---------- helpers ----------
           const statusByCode = (c) => (statuses && statuses.list.find((s) => s.code === c)) || null;
-          const labelOf = (c) => { if (CUSTOM[c]) return CUSTOM[c].name; const s = statusByCode(c); return s ? s.name : c; };
-          const titleOf = (c) => { if (CUSTOM[c]) return CUSTOM[c].name; const s = statusByCode(c); return s ? (s.sub ? `${s.parent} › ${s.name}` : s.name) : c; };
+          const labelOf = (c) => { const x = extraOf(c); if (x) return x.name; if (CUSTOM[c]) return CUSTOM[c].name; const s = statusByCode(c); return s ? s.name : c; };
+          const titleOf = (c) => { const x = extraOf(c); if (x) return x.name; if (CUSTOM[c]) return CUSTOM[c].name; const s = statusByCode(c); return s ? (s.sub ? `${s.parent} › ${s.name}` : s.name) : c; };
+
+          // Która pozycja jest aktywna: status zamówień albo pozycja dodatkowa (dopasowanie strony i parametrów).
+          function currentCode() {
+            const st = currentStatus();
+            if (st !== null) return st;
+            const urls = [location.href];
+            document.querySelectorAll('iframe').forEach((f) => { if (f.src) urls.push(f.src); });
+            for (const href of urls) {
+              let u;
+              try { u = new URL(href, location.href); } catch (e) { continue; }
+              const x = EXTRA.find((e) => u.pathname.endsWith('/' + e.page) &&
+                Object.entries(e.params).every(([k, v]) => u.searchParams.get(k) === v) &&
+                // show=o nie może pasować do adresu z newRmaChatMsg
+                !(e.params.show && u.searchParams.get('newRmaChatMsg')));
+              if (x) return x.code;
+            }
+            return null;
+          }
 
           function currentStatus() {
             try {
@@ -2180,7 +2253,7 @@ if (url.includes('megadron.pl/pl/products')) {
 
           function render() {
             if (!section) return;
-            const active = currentStatus();
+            const active = currentCode();
             section.innerHTML = '';
 
             const hdr = document.createElement('div');
@@ -2202,16 +2275,17 @@ if (url.includes('megadron.pl/pl/products')) {
             selected.forEach((code) => {
               const a = document.createElement('a');
               a.className = (code === active ? cls.active : cls.item) + ' tm-item';
-              a.href = CUSTOM[code] ? CUSTOM[code].href : '/panel/app/orders-list.php?status=' + encodeURIComponent(code);
+              a.href = hrefOf(code);
               a.dataset.code = code;
               a.draggable = false;
               a.title = titleOf(code);
+              const x = extraOf(code);
               a.innerHTML =
-                `<span class="${cls.icon}">label</span>` +
+                `<span class="${cls.icon}">${x ? x.icon : 'label'}</span>` +
                 `<span class="--title mr-auto"></span>` +
                 `<span class="${cls.badge} tm-badge"></span>`;
               a.querySelector('.--title').textContent = labelOf(code);
-              const col = colorOf(code);
+              const col = x ? null : colorOf(code);
               if (col) {
                 const ic = a.querySelector('.--icon');
                 ic.style.color = col;
@@ -2249,7 +2323,7 @@ if (url.includes('megadron.pl/pl/products')) {
 
           function updateActive() {
             if (!section || !cls) return;
-            const active = currentStatus();
+            const active = currentCode();
             section.querySelectorAll('a.tm-item').forEach((a) => {
               const want = (a.dataset.code === active ? cls.active : cls.item) + ' tm-item';
               if (a.className.replace(/\s*tm-(lift|settle)/g, '') !== want) a.className = want;
@@ -2354,7 +2428,7 @@ if (url.includes('megadron.pl/pl/products')) {
             ov.className = 'tm-ov';
             ov.innerHTML = `
               <div class="tm-md" role="dialog" aria-label="Widoczne statusy">
-                <div class="tm-md-h">Widoczne statusy<span class="material-symbols-outlined notranslate tm-x" title="Zamknij">close</span></div>
+                <div class="tm-md-h">Widoczne pozycje<span class="material-symbols-outlined notranslate tm-x" title="Zamknij">close</span></div>
                 <input type="search" class="tm-search" name="tm-status-filter" autocomplete="off" data-lpignore="true" data-1p-ignore placeholder="Szukaj statusu">
                 <div class="tm-md-list">Ładowanie statusów…</div>
                 <div class="tm-md-f">
@@ -2398,10 +2472,19 @@ if (url.includes('megadron.pl/pl/products')) {
 
             const fill = () => {
               listEl.innerHTML = '';
-              const extra = Object.keys(CUSTOM)
+              const custom = Object.keys(CUSTOM)
                 .filter((c) => !statuses.list.some((s) => s.code === c))
                 .map((c) => ({ code: c, name: CUSTOM[c].name, sub: false, parent: '' }));
-              extra.concat(statuses.list).forEach((s) => {
+              const extras = EXTRA.map((x, i) => ({ code: x.code, name: x.name, sub: false, parent: 'reklamacje zwroty pytania', grp: i === 0 ? 'Reklamacje, zwroty, pytania' : '' }));
+              const orders = custom.concat(statuses.list);
+              if (orders.length) orders[0] = { ...orders[0], grp: 'Statusy zamówień' };
+              extras.concat(orders).forEach((s) => {
+                if (s.grp) {
+                  const g = document.createElement('div');
+                  g.className = 'tm-grp';
+                  g.textContent = s.grp;
+                  listEl.appendChild(g);
+                }
                 const name = CUSTOM[s.code] ? CUSTOM[s.code].name : s.name;
                 const l = document.createElement('label');
                 if (s.sub) l.className = 'tm-sub';
@@ -2413,7 +2496,7 @@ if (url.includes('megadron.pl/pl/products')) {
                 const t = document.createElement('span');
                 t.textContent = name;
                 const c = document.createElement('code');
-                c.textContent = s.code;
+                c.textContent = extraOf(s.code) ? '' : s.code;
                 l.append(cb, t, c);
                 listEl.appendChild(l);
               });
@@ -2429,6 +2512,7 @@ if (url.includes('megadron.pl/pl/products')) {
             const applyFilter = () => {
               const q = search.value.trim().toLowerCase();
               listEl.querySelectorAll('label').forEach((l) => { l.style.display = !q || l.dataset.q.includes(q) ? '' : 'none'; });
+              listEl.querySelectorAll('.tm-grp').forEach((g) => { g.style.display = q ? 'none' : ''; });
             };
             search.addEventListener('input', applyFilter);
 
@@ -2439,7 +2523,7 @@ if (url.includes('megadron.pl/pl/products')) {
 
             ov.querySelector('.tm-save').addEventListener('click', () => {
               // zachowaj dotychczasową kolejność, nowe dopisz na końcu w kolejności IdoSell
-              const order = Object.keys(CUSTOM).concat(statuses.list.map((s) => s.code));
+              const order = EXTRA.map((x) => x.code).concat(Object.keys(CUSTOM), statuses.list.map((s) => s.code));
               const kept = selected.filter((c) => checked.has(c));
               const added = order.filter((c) => checked.has(c) && !kept.includes(c));
               selected = kept.concat(added);
