@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.38
+// @version      1.2.39
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1936,7 +1936,22 @@ if (url.includes('megadron.pl/pl/products')) {
               urlStatus: 'po',
             },
           };
-          const viaApi = (code) => !CUSTOM[code] && !!(API_STATUS[code] || code === 'wn');
+          // Pozycje, które API być może policzy (filtry kuriera / podstatusu / nazwy wewnętrzne).
+          // Skrypt najpierw porównuje wynik API z panelem; dopiero zgodny wynik (> 0) przełącza pozycję na API na 7 dni.
+          const WN_EXTRA_API = { br: 'packed_ready', wp: 'wait_for_packaging', wd: 'wait_for_dispatch', wr: 'wait_for_receive' };
+          const PICKUP = { ordersStatuses: ['ready'], couriersId: [0] }; // odbiór osobisty = kurier 0
+          function apiPlan(code) {
+            if (code === 'p_odb') return [{ s: 1, p: PICKUP }];
+            if (code === 'p') return [{ s: 1, p: { ordersStatuses: ['ready'] } }, { s: -1, p: PICKUP }];
+            if (CUSTOM[code]) return null;
+            const m = /^([a-z]+)-(\d+)$/.exec(code);
+            if (m && API_STATUS[m[1]]) return [{ s: 1, p: { ordersStatuses: [API_STATUS[m[1]]], ordersStatusesIds: [+m[2]] } }];
+            if (WN_EXTRA_API[code]) return [{ s: 1, p: { ordersStatuses: [WN_EXTRA_API[code]] } }];
+            return null;
+          }
+          const CHECK_TTL = 7 * 24 * 3600 * 1000;
+          const trusted = (c) => { const st = apiCheck[c]; return !!(st && st.ok === true && Date.now() - st.ts < CHECK_TTL); };
+          const viaApi = (code) => (!CUSTOM[code] && !!(API_STATUS[code] || code === 'wn')) || (!!apiPlan(code) && trusted(code));
 
           // Pozycje spoza statusów zamówień: liczby z widżetu „Monitor” pulpitu panelu
           // (POST /panel/api/panel/monitor/getMonitorStats – jedno lekkie zapytanie dla wszystkich).
@@ -1974,6 +1989,8 @@ if (url.includes('megadron.pl/pl/products')) {
           let statuses = load('statuses', null);      // {ts, list:[{code,name,sub,parent}], views:[{id,name}]}
           let selected = load('selected', DEFAULT_SELECTED);
           let names = load('names', {});                // własne nazwy pozycji { kod: nazwa } – tylko w tym Tampermonkey
+          let apiCheck = load('apiCheck', {});          // { kod: {ok:true|false|null, ts, miss, why} } – czy API liczy tak jak panel
+          const limited = {};                           // kody, dla których API odpowiedziało 429 w tym załadowaniu
           // jednorazowo dodaj „Gotowe do odbioru” pod „Gotowe”
           if (!load('addedPOdb', false) && !selected.includes('p_odb')) {
             const i = selected.indexOf('p');
@@ -2063,17 +2080,22 @@ if (url.includes('megadron.pl/pl/products')) {
             return statuses;
           }
 
-          async function fetchCountApi(apiStatus, key) {
+          // filter: kod/tablica statusów API albo obiekt parametrów wyszukiwania (np. z couriersId)
+          async function fetchCountApi(filter, key) {
+            const params = (typeof filter === 'string' || Array.isArray(filter)) ? { ordersStatuses: [].concat(filter) } : filter;
             const r = await fetch(API_URL, {
               method: 'POST',
               credentials: 'omit',
               headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-API-KEY': key },
-              body: JSON.stringify({ params: { ordersStatuses: [].concat(apiStatus), resultsPage: 0, resultsLimit: 1 } }),
+              body: JSON.stringify({ params: { ...params, resultsPage: 0, resultsLimit: 1 } }),
             });
             let j = null;
             try { j = await r.json(); } catch (e) { /* brak JSON */ }
             if (!r.ok && !(r.status === 404 && j && j.errors)) {
-              throw new Error('API HTTP ' + r.status + (r.status === 429 ? ' (limit zapytań)' : r.status === 401 || r.status === 403 ? ' (klucz)' : ''));
+              const err = new Error('API HTTP ' + r.status + (r.status === 429 ? ' (limit zapytań)' : r.status === 401 || r.status === 403 ? ' (klucz)' : ''));
+              if (r.status === 429) err.rate = true;
+              err.status = r.status;
+              throw err;
             }
             if (!j) throw new Error('API: pusta odpowiedź');
             const n = parseInt(j.resultsNumberAll, 10);
@@ -2086,26 +2108,76 @@ if (url.includes('megadron.pl/pl/products')) {
             return n;
           }
 
-          // Zwraca {n, src, ms, note}; przy błędzie API automatycznie liczy przez panel.
+          async function planCount(plan) {
+            const ns = await Promise.all(plan.map((x) => fetchCountApi(x.p, apiKey)));
+            return plan.reduce((s, x, i) => s + x.s * ns[i], 0);
+          }
+          function setCheck(code, v) { apiCheck[code] = v; save('apiCheck', apiCheck); }
+
+          // Pozycja z apiPlan: zaufana → samo API; odrzucona → sam panel; w innym razie oba i porównanie (pokazuje panel).
+          async function smartCount(code) {
+            const plan = apiPlan(code);
+            const st = apiCheck[code] || {};
+            const recent = st.ts && Date.now() - st.ts < CHECK_TTL;
+            if (recent && st.ok === true) return { n: await planCount(plan), src: 'API (zgodne z panelem)' };
+            if (recent && st.ok === false) return { n: await fetchCountPanel(code), src: 'panel', note: 'API ≠ panel' + (st.why ? ': ' + st.why : '') };
+            const [pn, ar] = await Promise.all([
+              fetchCountPanel(code),
+              planCount(plan).then((n) => ({ n }), (err) => ({ err })),
+            ]);
+            if (ar.err) {
+              if (ar.err.rate) return { n: pn, src: 'panel – sprawdzam API (limit zapytań)' };
+              const why = ar.err.message || String(ar.err);
+              const s = ar.err.status;
+              // 400/404/422… = API nie zna filtra → od razu panel; sieć, 5xx, 401/403 (klucz) = chwilowe, sprawdzimy znowu
+              if (s >= 400 && s < 500 && s !== 401 && s !== 403) setCheck(code, { ok: false, ts: Date.now(), why });
+              return { n: pn, src: 'panel', note: why };
+            }
+            if (ar.n === pn) {
+              if (pn > 0) { setCheck(code, { ok: true, ts: Date.now() }); return { n: pn, src: 'panel = API – od teraz API' }; }
+              return { n: pn, src: 'panel – sprawdzam API (0 = 0)' };
+            }
+            const miss = (st.ok == null ? (st.miss || 0) : 0) + 1;
+            if (miss >= 2) setCheck(code, { ok: false, ts: Date.now(), why: `API ${ar.n} / panel ${pn}` });
+            else setCheck(code, { ok: null, miss });
+            return { n: pn, src: `panel (API ≠ panel: ${ar.n} / ${pn})` };
+          }
+
+          // Zwraca {n, src, ms, note}; przy błędzie API (poza limitem 429) automatycznie liczy przez panel.
           async function fetchCount(code) {
             const t0 = performance.now();
+            const done = (r) => ({ ...r, ms: Math.round(performance.now() - t0) });
             const apiStatus = CUSTOM[code] ? null : API_STATUS[code];
             let note = '';
             if (apiKey && code === 'wn') {
               try {
+                if (WN_PANEL.every(trusted)) {
+                  const n = await fetchCountApi(WN_API.concat(WN_PANEL.map((c) => WN_EXTRA_API[c])), apiKey);
+                  return done({ n, src: 'API' });
+                }
                 const parts = await Promise.all([
                   fetchCountApi(WN_API, apiKey),
-                  ...WN_PANEL.map((c) => fetchCountPanel(c)),
+                  ...WN_PANEL.map((c) => smartCount(c).then((r) => r.n)),
                 ]);
-                return { n: parts.reduce((s, x) => s + x, 0), src: 'API + panel (' + WN_PANEL.join(', ') + ')', ms: Math.round(performance.now() - t0) };
+                const viaPanel = WN_PANEL.filter((c) => !trusted(c));
+                return done({ n: parts.reduce((s, x) => s + x, 0), src: viaPanel.length ? 'API + panel (' + viaPanel.join(', ') + ')' : 'API' });
               } catch (e) {
+                if (e.rate) throw e;
                 note = e.message || String(e);
               }
             } else if (apiKey && apiStatus) {
               try {
                 const n = await fetchCountApi(apiStatus, apiKey);
-                return { n, src: 'API', ms: Math.round(performance.now() - t0) };
+                return done({ n, src: 'API' });
               } catch (e) {
+                if (e.rate) throw e;
+                note = e.message || String(e);
+              }
+            } else if (apiKey && apiPlan(code)) {
+              try {
+                return done(await smartCount(code));
+              } catch (e) {
+                if (e.rate) throw e;
                 note = e.message || String(e);
               }
             }
@@ -2179,9 +2251,11 @@ if (url.includes('megadron.pl/pl/products')) {
                   meta[c] = res;
                   fresh[c] = true;
                   delete errors[c];
+                  delete limited[c];
                   save('counts', counts);
                 } catch (e) {
-                  errors[c] = e.message || String(e);
+                  if (e.rate && counts[c] != null) limited[c] = true; // limit API – zostaw ostatnią liczbę, bez ciężkiego zapytania do panelu
+                  else errors[c] = e.message || String(e);
                 }
                 updateBadge(c);
               }
@@ -2312,7 +2386,12 @@ if (url.includes('megadron.pl/pl/products')) {
             const b = a.querySelector('.tm-badge');
             b.classList.remove('tm-stale', 'tm-err');
             a.title = titleOf(code) + (counts[code] != null ? ` (${counts[code]})` : '');
-            if (errors[code] && !fresh[code]) {
+            if (limited[code] && !fresh[code] && counts[code] != null) {
+              b.textContent = String(counts[code]);
+              b.classList.add('tm-stale');
+              b.title = 'Limit zapytań API – ostatnia znana liczba';
+              a.title += ' – limit API, ostatnia znana liczba';
+            } else if (errors[code] && !fresh[code]) {
               b.textContent = counts[code] != null ? String(counts[code]) : '!';
               b.classList.add('tm-err');
               b.title = 'Błąd pobierania: ' + errors[code];
