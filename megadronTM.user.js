@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.39
+// @version      1.2.40
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1945,7 +1945,8 @@ if (url.includes('megadron.pl/pl/products')) {
             if (code === 'p') return [{ s: 1, p: { ordersStatuses: ['ready'] } }, { s: -1, p: PICKUP }];
             if (CUSTOM[code]) return null;
             const m = /^([a-z]+)-(\d+)$/.exec(code);
-            if (m && API_STATUS[m[1]]) return [{ s: 1, p: { ordersStatuses: [API_STATUS[m[1]]], ordersStatusesIds: [+m[2]] } }];
+            const parent = m && (API_STATUS[m[1]] || WN_EXTRA_API[m[1]]); // podstatus np. b-110 (packed) albo br-116 (packed_ready)
+            if (parent) return [{ s: 1, p: { ordersStatuses: [parent], ordersStatusesIds: [+m[2]] } }];
             if (WN_EXTRA_API[code]) return [{ s: 1, p: { ordersStatuses: [WN_EXTRA_API[code]] } }];
             return null;
           }
