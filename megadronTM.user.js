@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.12
+// @version      1.2.13
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1548,6 +1548,12 @@ if (url.includes('megadron.pl/pl/products')) {
               color: 'p',
               urlStatus: 'po',
             },
+            // Pozycje spoza zamówień – licznik odczytywany ze strony panelu (page: true).
+            rma_na: { name: 'Reklamacje niezaakceptowane', href: '/panel/app/rma.php?action=search&show=na', icon: 'assignment_return', page: true },
+            rma_o: { name: 'Reklamacje niezrealizowane', href: '/panel/app/rma.php?action=search&show=o', icon: 'assignment_return', page: true },
+            rma_chat: { name: 'Reklamacje – nowe wiadomości', href: '/panel/app/rma.php?action=search&newRmaChatMsg=1', icon: 'chat', page: true },
+            ret_o: { name: 'Zwroty niezrealizowane', href: '/panel/app/returns.php?action=search&show=o', icon: 'keyboard_return', page: true },
+            faq_new: { name: 'Pytania bez odpowiedzi', href: '/panel/app/products-faq.php?search=new_questions', icon: 'help', page: true },
           };
           const viaApi = (code) => !CUSTOM[code] && !!(API_STATUS[code] || code === 'wn');
 
@@ -1702,7 +1708,29 @@ if (url.includes('megadron.pl/pl/products')) {
             return { n, src: 'panel', ms: Math.round(performance.now() - t1), note };
           }
 
+          // Liczba wyników ze strony panelu (RMA, zwroty, pytania). Strony /panel/app/* bywają
+          // opakowaniem z iframe – wtedy pobierana jest strona z iframe.
+          async function fetchCountPage(href, depth = 0) {
+            const r = await fetch(href, { credentials: 'include' });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+            const file = new URL(href, location.href).pathname.split('/').pop();
+            const fr = doc.querySelector(`iframe[src*="${file}"]`);
+            if (fr && depth < 2) return fetchCountPage(new URL(fr.getAttribute('src'), new URL(href, location.href)).href, depth + 1);
+            const txt = (doc.body ? doc.body.textContent : '').replace(/\s+/g, ' ');
+            const m = txt.match(/(?:znaleziono|liczba (?:wyników|rekordów|pozycji)|wyników|rekordów|wszystkich|razem)\s*:?\s*(\d[\d ]*)/i);
+            if (m) return parseInt(m[1].replace(/ /g, ''), 10);
+            if (/brak (?:wyników|danych|reklamacji|zwrotów|pytań)|nie znaleziono/i.test(txt)) return 0;
+            const tables = [...doc.querySelectorAll('table')];
+            const rows = (t) => t.querySelectorAll(':scope > tbody > tr, :scope > tr').length;
+            const t = tables.sort((a, b) => rows(b) - rows(a))[0];
+            if (localStorage.mgd_statusy_debug === '1') console.log('[Statusy]', href, { txt: txt.slice(0, 2000), rows: t && rows(t) });
+            if (!t) throw new Error('Nie rozpoznano liczby wyników');
+            return Math.max(0, rows(t) - (t.querySelector('th') ? 1 : 0));
+          }
+
           async function fetchCountPanel(code) {
+            if (CUSTOM[code] && CUSTOM[code].page) return fetchCountPage(CUSTOM[code].href);
             const q = CUSTOM[code] ? CUSTOM[code].query : { status: code };
             let body = 'action=ajax&page=1&' + new URLSearchParams(q).toString();
             if (countView) body += '&view=' + encodeURIComponent(countView);
@@ -1754,6 +1782,12 @@ if (url.includes('megadron.pl/pl/products')) {
           function currentStatus() {
             try {
               const u = new URL(location.href);
+              const pg = Object.keys(CUSTOM).find((k) => {
+                if (!CUSTOM[k].page) return false;
+                const h = new URL(CUSTOM[k].href, location.href);
+                return h.pathname === u.pathname && [...h.searchParams].every(([n, v]) => u.searchParams.get(n) === v);
+              });
+              if (pg) return pg;
               if (!/orders-list\.php/.test(u.pathname)) return null;
               const st = u.searchParams.get('status');
               const f = document.querySelector('iframe[src*="orders-list.php"]');
@@ -1821,7 +1855,7 @@ if (url.includes('megadron.pl/pl/products')) {
               a.draggable = true;
               a.title = titleOf(code);
               a.innerHTML =
-                `<span class="${cls.icon}">label</span>` +
+                `<span class="${cls.icon}">${(CUSTOM[code] && CUSTOM[code].icon) || 'label'}</span>` +
                 `<span class="--title mr-auto"></span>` +
                 `<span class="${cls.badge} tm-badge"></span>`;
               a.querySelector('.--title').textContent = labelOf(code);
