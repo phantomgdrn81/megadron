@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.37
+// @version      1.2.38
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1973,6 +1973,7 @@ if (url.includes('megadron.pl/pl/products')) {
 
           let statuses = load('statuses', null);      // {ts, list:[{code,name,sub,parent}], views:[{id,name}]}
           let selected = load('selected', DEFAULT_SELECTED);
+          let names = load('names', {});                // własne nazwy pozycji { kod: nazwa } – tylko w tym Tampermonkey
           // jednorazowo dodaj „Gotowe do odbioru” pod „Gotowe”
           if (!load('addedPOdb', false) && !selected.includes('p_odb')) {
             const i = selected.indexOf('p');
@@ -2023,6 +2024,11 @@ if (url.includes('megadron.pl/pl/products')) {
             .tm-md-list .tm-grp:first-child{padding-top:2px}
             .tm-md-list label.tm-sub{padding-left:22px;color:#555}
             .tm-md-list label code{margin-left:auto;font-size:11px;color:#999}
+            .tm-md-list .tm-alias{color:#888}
+            .tm-md-list .tm-ren{font-size:16px;opacity:0;cursor:pointer;color:#666;padding:0 2px}
+            .tm-md-list label:hover .tm-ren{opacity:.6}
+            .tm-md-list .tm-ren:hover{opacity:1 !important}
+            .tm-md-list .tm-alias-in{font:inherit;font-size:12px;padding:1px 4px;border:1px solid #bbb;border-radius:3px;width:150px}
             .tm-md-f{border-top:1px solid #eee;padding:10px 16px 14px;display:flex;flex-direction:column;gap:10px}
             .tm-row{display:flex;align-items:center;gap:8px}
             .tm-row select{margin-left:auto;padding:5px 8px;border:1px solid #d6d6db;border-radius:6px;font:inherit;max-width:200px}
@@ -2189,8 +2195,10 @@ if (url.includes('megadron.pl/pl/products')) {
 
           // ---------- helpers ----------
           const statusByCode = (c) => (statuses && statuses.list.find((s) => s.code === c)) || null;
-          const labelOf = (c) => { const x = extraOf(c); if (x) return x.name; if (CUSTOM[c]) return CUSTOM[c].name; const s = statusByCode(c); return s ? s.name : c; };
-          const titleOf = (c) => { const x = extraOf(c); if (x) return x.name; if (CUSTOM[c]) return CUSTOM[c].name; const s = statusByCode(c); return s ? (s.sub ? `${s.parent} › ${s.name}` : s.name) : c; };
+          const baseLabel = (c) => { const x = extraOf(c); if (x) return x.name; if (CUSTOM[c]) return CUSTOM[c].name; const s = statusByCode(c); return s ? s.name : c; };
+          const baseTitle = (c) => { const x = extraOf(c); if (x) return x.name; if (CUSTOM[c]) return CUSTOM[c].name; const s = statusByCode(c); return s ? (s.sub ? `${s.parent} › ${s.name}` : s.name) : c; };
+          const labelOf = (c) => names[c] || baseLabel(c);
+          const titleOf = (c) => names[c] ? `${names[c]} – ${baseTitle(c)}` : baseTitle(c);
 
           // Która pozycja jest aktywna: status zamówień albo pozycja dodatkowa (dopasowanie strony i parametrów).
           function currentCode() {
@@ -2445,7 +2453,11 @@ if (url.includes('megadron.pl/pl/products')) {
               </div>`;
             document.body.appendChild(ov);
             const close = () => { ov.remove(); document.removeEventListener('keydown', onKey, true); };
-            const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+            const onKey = (e) => {
+              if (e.key !== 'Escape') return;
+              if (e.target && e.target.classList && e.target.classList.contains('tm-alias-in')) return; // Esc w polu nazwy = anuluj edycję
+              e.stopPropagation(); close();
+            };
             document.addEventListener('keydown', onKey, true);
             ov.addEventListener('mousedown', (e) => { if (e.target === ov) close(); });
             ov.querySelector('.tm-x').addEventListener('click', close);
@@ -2469,6 +2481,7 @@ if (url.includes('megadron.pl/pl/products')) {
               }
             });
             let checked = new Set(selected);
+            const draft = { ...names }; // własne nazwy – zapis dopiero po „Zapisz”
 
             const fill = () => {
               listEl.innerHTML = '';
@@ -2488,16 +2501,52 @@ if (url.includes('megadron.pl/pl/products')) {
                 const name = CUSTOM[s.code] ? CUSTOM[s.code].name : s.name;
                 const l = document.createElement('label');
                 if (s.sub) l.className = 'tm-sub';
-                l.dataset.q = (name + ' ' + s.parent + ' ' + s.code).toLowerCase();
+                const setQ = () => { l.dataset.q = (name + ' ' + (draft[s.code] || '') + ' ' + s.parent + ' ' + s.code).toLowerCase(); };
+                setQ();
                 const cb = document.createElement('input');
                 cb.type = 'checkbox';
                 cb.checked = checked.has(s.code);
                 cb.addEventListener('change', () => { cb.checked ? checked.add(s.code) : checked.delete(s.code); });
                 const t = document.createElement('span');
                 t.textContent = name;
+                const al = document.createElement('span');
+                al.className = 'tm-alias';
+                const showAlias = () => { al.textContent = draft[s.code] ? `(${draft[s.code]})` : ''; };
+                showAlias();
+                const ren = document.createElement('span');
+                ren.className = 'material-symbols-outlined notranslate tm-ren';
+                ren.textContent = 'edit';
+                ren.title = 'Własna nazwa (widoczna tylko u Ciebie)';
+                ren.addEventListener('click', (e) => {
+                  e.preventDefault(); e.stopPropagation();
+                  if (l.querySelector('.tm-alias-in')) return;
+                  const inp = document.createElement('input');
+                  inp.type = 'text';
+                  inp.className = 'tm-alias-in';
+                  inp.placeholder = 'własna nazwa';
+                  inp.autocomplete = 'off';
+                  inp.value = draft[s.code] || '';
+                  al.replaceWith(inp);
+                  ren.style.display = 'none';
+                  let done = false;
+                  const finish = (ok) => {
+                    if (done) return; done = true;
+                    if (ok) { const v = inp.value.trim(); if (v) draft[s.code] = v; else delete draft[s.code]; }
+                    showAlias(); setQ();
+                    inp.replaceWith(al);
+                    ren.style.display = '';
+                  };
+                  inp.addEventListener('click', (ev) => ev.preventDefault()); // nie przełączaj checkboxa
+                  inp.addEventListener('keydown', (ev) => {
+                    if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+                    else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); finish(false); }
+                  });
+                  inp.addEventListener('blur', () => finish(true));
+                  inp.focus(); inp.select();
+                });
                 const c = document.createElement('code');
                 c.textContent = extraOf(s.code) ? '' : s.code;
-                l.append(cb, t, c);
+                l.append(cb, t, al, ren, c);
                 listEl.appendChild(l);
               });
               viewSel.length = 1;
@@ -2528,6 +2577,8 @@ if (url.includes('megadron.pl/pl/products')) {
               const added = order.filter((c) => checked.has(c) && !kept.includes(c));
               selected = kept.concat(added);
               save('selected', selected);
+              names = { ...draft };
+              save('names', names);
               const newView = viewSel.value;
               if (newView !== countView) {
                 countView = newView;
