@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.43
+// @version      1.2.44
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1905,22 +1905,14 @@ if (url.includes('megadron.pl/pl/products')) {
 
           const DEFAULT_SELECTED = ['wn', 'n', 'o', 'b', 'p', 'w'];
           const STATUS_TTL = 24 * 3600 * 1000;
-          const PANEL_CONCURRENCY = 2;   // ciężkie zapytania panelu
-          const API_CONCURRENCY = 3;     // lekkie zapytania Admin API
-          const API_URL = '/api/admin/v8/orders/orders/search';
+          const PANEL_CONCURRENCY = 2;   // zapytania do listy zamówień panelu (tylko to, czego nie ma w statystykach)
 
-          // Kod statusu w panelu -> status w Admin API (orders/orders/search, pole ordersStatuses).
-          // Kody bez odpowiednika (br, z, l, r, wd, wp, wr, wn) i podstatusy (np. b-110) liczone są przez panel.
-          const API_STATUS = {
+          // Kod statusu w panelu -> nazwa statusu w statystykach nowego panelu zamówień.
+          const STATUS_NAME = {
             n: 'new', o: 'on_order', b: 'packed', p: 'ready', w: 'payment_waiting',
-            d: 'delivery_waiting', h: 'suspended', t: 'finished', j: 'joined',
-            k: 'canceled', i: 'false', s: 'lost', a: 'finished_ext',
+            d: 'delivery_waiting', h: 'suspended', a: 'finished_ext',
+            br: 'packed_ready', wp: 'wait_for_packaging', wd: 'wait_for_dispatch', wr: 'wait_for_receive',
           };
-
-          // „* wszystkie nieobsłużone” (wn) = n+o+b+br+p+w+d+h+wp(+wd+wr) – sprawdzone na sumach z panelu.
-          // Statusy z odpowiednikiem w API liczone jednym zapytaniem, reszta (zwykle kilka zamówień) przez panel.
-          const WN_API = ['new', 'on_order', 'packed', 'ready', 'payment_waiting', 'delivery_waiting', 'suspended'];
-          const WN_PANEL = ['br', 'wp', 'wd', 'wr'];
           // Pozycje z własnym linkiem i filtrem (licznik liczony przez panel z tymi samymi filtrami, bez operatora).
           const CUSTOM = {
             p: {
@@ -1936,23 +1928,6 @@ if (url.includes('megadron.pl/pl/products')) {
               urlStatus: 'po',
             },
           };
-          // Pozycje, które API być może policzy (filtry kuriera / podstatusu / nazwy wewnętrzne).
-          // Skrypt najpierw porównuje wynik API z panelem; dopiero zgodny wynik (> 0) przełącza pozycję na API na 7 dni.
-          const WN_EXTRA_API = { br: 'packed_ready', wp: 'wait_for_packaging', wd: 'wait_for_dispatch', wr: 'wait_for_receive' };
-          const PICKUP = { ordersStatuses: ['ready'], couriersId: [0] }; // odbiór osobisty = kurier 0
-          function apiPlan(code) {
-            if (code === 'p_odb') return [{ s: 1, p: PICKUP }];
-            if (code === 'p') return [{ s: 1, p: { ordersStatuses: ['ready'] } }, { s: -1, p: PICKUP }];
-            if (CUSTOM[code]) return null;
-            const m = /^([a-z]+)-(\d+)$/.exec(code);
-            const parent = m && (API_STATUS[m[1]] || WN_EXTRA_API[m[1]]); // podstatus np. b-110 (packed) albo br-116 (packed_ready)
-            if (parent) return [{ s: 1, p: { ordersStatuses: [parent], ordersStatusesIds: [+m[2]] } }];
-            if (WN_EXTRA_API[code]) return [{ s: 1, p: { ordersStatuses: [WN_EXTRA_API[code]] } }];
-            return null;
-          }
-          const CHECK_TTL = 7 * 24 * 3600 * 1000;
-          const trusted = (c) => { const st = apiCheck[c]; return !!(st && st.ok === true && Date.now() - st.ts < CHECK_TTL); };
-          const viaApi = (code) => (!CUSTOM[code] && !!(API_STATUS[code] || code === 'wn')) || (!!apiPlan(code) && trusted(code));
 
           // Pozycje spoza statusów zamówień: liczby z widżetu „Monitor” pulpitu panelu
           // (POST /panel/api/panel/monitor/getMonitorStats – jedno lekkie zapytanie dla wszystkich).
@@ -1992,8 +1967,9 @@ if (url.includes('megadron.pl/pl/products')) {
           let enabled = load('enabled', true);          // suwak w nagłówku: false = sekcja zwinięta, nic nie pobiera
           let swDown = false;
           let names = load('names', {});                // własne nazwy pozycji { kod: nazwa } – tylko w tym Tampermonkey
-          let apiCheck = load('apiCheck', {});          // { kod: {ok:true|false|null, ts, miss, why} } – czy API liczy tak jak panel
-          const limited = {};                           // kody, dla których API odpowiedziało 429 w tym załadowaniu
+          // Admin API usunięte (1.2.44): sprzątamy zapisany klucz i dane weryfikacji z Tampermonkey
+          if (load('apiKey', '')) save('apiKey', '');
+          if (load('apiCheck', null)) save('apiCheck', null);
           // jednorazowo dodaj „Gotowe do odbioru” pod „Gotowe”
           if (!load('addedPOdb', false) && !selected.includes('p_odb')) {
             const i = selected.indexOf('p');
@@ -2004,7 +1980,6 @@ if (url.includes('megadron.pl/pl/products')) {
           save('addedPOdb', true);
           let counts = load('counts', {});            // {code: n}
           let countView = load('view', '');            // '' = domyślny widok użytkownika
-          let apiKey = load('apiKey', '');             // klucz Admin API (opcjonalny, wpisuje użytkownik)
           const fresh = {};                            // code -> true (pobrane w tym załadowaniu strony)
           const errors = {};                           // code -> message
           const meta = {};                             // code -> {src:'API'|'panel', ms, note}
@@ -2045,7 +2020,6 @@ if (url.includes('megadron.pl/pl/products')) {
             .tm-md-h .tm-x{margin-left:auto;cursor:pointer;font-size:20px;opacity:.6}
             .tm-md-h .tm-x:hover{opacity:1}
             .tm-md input.tm-search{margin:0 16px 8px;padding:7px 10px;border:1px solid #d6d6db;border-radius:6px;font:inherit}
-            .tm-md input.tm-key{padding:6px 8px;border:1px solid #d6d6db;border-radius:6px;font:inherit;-webkit-text-security:disc;text-security:disc}
             .tm-md-list{overflow:auto;padding:0 16px;flex:1;min-height:120px}
             .tm-md-list label{display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer}
             .tm-md-list .tm-grp{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:#888;padding:10px 0 2px}
@@ -2091,110 +2065,11 @@ if (url.includes('megadron.pl/pl/products')) {
             return statuses;
           }
 
-          // filter: kod/tablica statusów API albo obiekt parametrów wyszukiwania (np. z couriersId)
-          async function fetchCountApi(filter, key) {
-            const params = (typeof filter === 'string' || Array.isArray(filter)) ? { ordersStatuses: [].concat(filter) } : filter;
-            const r = await fetch(API_URL, {
-              method: 'POST',
-              credentials: 'omit',
-              headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-API-KEY': key },
-              body: JSON.stringify({ params: { ...params, resultsPage: 0, resultsLimit: 1 } }),
-            });
-            let j = null;
-            try { j = await r.json(); } catch (e) { /* brak JSON */ }
-            if (!r.ok && !(r.status === 404 && j && j.errors)) {
-              const err = new Error('API HTTP ' + r.status + (r.status === 429 ? ' (limit zapytań)' : r.status === 401 || r.status === 403 ? ' (klucz)' : ''));
-              if (r.status === 429) err.rate = true;
-              err.status = r.status;
-              throw err;
-            }
-            if (!j) throw new Error('API: pusta odpowiedź');
-            const n = parseInt(j.resultsNumberAll, 10);
-            if (isNaN(n)) {
-              const fs = j.errors && (j.errors.faultString || j.errors.faultCode);
-              // brak wyników bywa zgłaszany jako błąd "brak danych" – traktuj jako 0
-              if (j.errors && (String(j.errors.faultCode) === '2' || /no results|brak|not found|nie znaleziono/i.test(String(fs)))) return 0;
-              throw new Error('API: ' + (fs || 'brak resultsNumberAll'));
-            }
-            return n;
-          }
-
-          async function planCount(plan) {
-            const ns = await Promise.all(plan.map((x) => fetchCountApi(x.p, apiKey)));
-            return plan.reduce((s, x, i) => s + x.s * ns[i], 0);
-          }
-          function setCheck(code, v) { apiCheck[code] = v; save('apiCheck', apiCheck); }
-
-          // Pozycja z apiPlan: zaufana → samo API; odrzucona → sam panel; w innym razie oba i porównanie (pokazuje panel).
-          async function smartCount(code) {
-            const plan = apiPlan(code);
-            const st = apiCheck[code] || {};
-            const recent = st.ts && Date.now() - st.ts < CHECK_TTL;
-            if (recent && st.ok === true) return { n: await planCount(plan), src: 'API (zgodne z panelem)' };
-            if (recent && st.ok === false) return { n: await fetchCountPanel(code), src: 'panel', note: 'API ≠ panel' + (st.why ? ': ' + st.why : '') };
-            const [pn, ar] = await Promise.all([
-              fetchCountPanel(code),
-              planCount(plan).then((n) => ({ n }), (err) => ({ err })),
-            ]);
-            if (ar.err) {
-              if (ar.err.rate) return { n: pn, src: 'panel – sprawdzam API (limit zapytań)' };
-              const why = ar.err.message || String(ar.err);
-              const s = ar.err.status;
-              // 400/404/422… = API nie zna filtra → od razu panel; sieć, 5xx, 401/403 (klucz) = chwilowe, sprawdzimy znowu
-              if (s >= 400 && s < 500 && s !== 401 && s !== 403) setCheck(code, { ok: false, ts: Date.now(), why });
-              return { n: pn, src: 'panel', note: why };
-            }
-            if (ar.n === pn) {
-              if (pn > 0) { setCheck(code, { ok: true, ts: Date.now() }); return { n: pn, src: 'panel = API – od teraz API' }; }
-              return { n: pn, src: 'panel – sprawdzam API (0 = 0)' };
-            }
-            const miss = (st.ok == null ? (st.miss || 0) : 0) + 1;
-            if (miss >= 2) setCheck(code, { ok: false, ts: Date.now(), why: `API ${ar.n} / panel ${pn}` });
-            else setCheck(code, { ok: null, miss });
-            return { n: pn, src: `panel (API ≠ panel: ${ar.n} / ${pn})` };
-          }
-
-          // Zwraca {n, src, ms, note}; przy błędzie API (poza limitem 429) automatycznie liczy przez panel.
+          // Zwraca {n, src, ms} – lista zamówień panelu (dla pozycji spoza statystyk albo gdy statystyki nie działają).
           async function fetchCount(code) {
-            const t0 = performance.now();
-            const done = (r) => ({ ...r, ms: Math.round(performance.now() - t0) });
-            const apiStatus = CUSTOM[code] ? null : API_STATUS[code];
-            let note = '';
-            if (apiKey && code === 'wn') {
-              try {
-                if (WN_PANEL.every(trusted)) {
-                  const n = await fetchCountApi(WN_API.concat(WN_PANEL.map((c) => WN_EXTRA_API[c])), apiKey);
-                  return done({ n, src: 'API' });
-                }
-                const parts = await Promise.all([
-                  fetchCountApi(WN_API, apiKey),
-                  ...WN_PANEL.map((c) => smartCount(c).then((r) => r.n)),
-                ]);
-                const viaPanel = WN_PANEL.filter((c) => !trusted(c));
-                return done({ n: parts.reduce((s, x) => s + x, 0), src: viaPanel.length ? 'API + panel (' + viaPanel.join(', ') + ')' : 'API' });
-              } catch (e) {
-                if (e.rate) throw e;
-                note = e.message || String(e);
-              }
-            } else if (apiKey && apiStatus) {
-              try {
-                const n = await fetchCountApi(apiStatus, apiKey);
-                return done({ n, src: 'API' });
-              } catch (e) {
-                if (e.rate) throw e;
-                note = e.message || String(e);
-              }
-            } else if (apiKey && apiPlan(code)) {
-              try {
-                return done(await smartCount(code));
-              } catch (e) {
-                if (e.rate) throw e;
-                note = e.message || String(e);
-              }
-            }
             const t1 = performance.now();
             const n = await fetchCountPanel(code);
-            return { n, src: 'panel', ms: Math.round(performance.now() - t1), note };
+            return { n, src: 'panel', ms: Math.round(performance.now() - t1) };
           }
 
           async function fetchCountPanel(code) {
@@ -2250,9 +2125,8 @@ if (url.includes('megadron.pl/pl/products')) {
           // wszystkich statusów niezakończonych i ich podstatusów. Wewnętrzne API panelu – przy błędzie liczymy jak dawniej.
           const STATS_URL = '/panel/api/orders/ordersStatistics/getOrdersCountByStatuses?scope=unfinished';
           const STATS_CODE = {}; // nazwa statusu w odpowiedzi -> kod panelu
-          Object.keys(API_STATUS).forEach((c) => { STATS_CODE[API_STATUS[c]] = c; });
-          Object.keys(WN_EXTRA_API).forEach((c) => { STATS_CODE[WN_EXTRA_API[c]] = c; });
-          const STATS_BASE = ['n', 'w', 'd', 'o', 'h', 'b', 'p', 'a', 'br', 'wd', 'wp', 'wr']; // statusy niezakończone
+          Object.keys(STATUS_NAME).forEach((c) => { STATS_CODE[STATUS_NAME[c]] = c; });
+          const STATS_BASE = Object.keys(STATUS_NAME); // statusy niezakończone
           const statsCovers = (c) => !CUSTOM[c] && !extraOf(c) && (c === 'wn' || STATS_BASE.includes(c.split('-')[0]));
           async function fetchStats() {
             const r = await fetch(STATS_URL, { credentials: 'include', headers: { 'Accept': 'application/json' } });
@@ -2276,11 +2150,13 @@ if (url.includes('megadron.pl/pl/products')) {
             let todo = pending.filter((c) => !extraOf(c));
             const extraJob = refreshExtras(pending.filter(extraOf));
             let statsErr = '';
+            let statsP = null;
+            const getStats = () => statsP || (statsP = fetchStats()); // jedno zapytanie na odświeżenie
             const covered = todo.filter(statsCovers);
             if (covered.length) {
               const t0 = performance.now();
               try {
-                const m = await fetchStats();
+                const m = await getStats();
                 const ms = Math.round(performance.now() - t0);
                 covered.forEach((c) => {
                   let n = m[c];
@@ -2290,7 +2166,6 @@ if (url.includes('megadron.pl/pl/products')) {
                   meta[c] = { n, src: 'statystyki panelu', ms };
                   fresh[c] = true;
                   delete errors[c];
-                  delete limited[c];
                   updateBadge(c);
                 });
                 save('counts', counts);
@@ -2299,9 +2174,31 @@ if (url.includes('megadron.pl/pl/products')) {
                 statsErr = e.message || String(e);
               }
             }
-            const useApi = (c) => !!(apiKey && viaApi(c));
-            const apiQ = todo.filter(useApi);
-            const panelQ = todo.filter((c) => !useApi(c));
+            // „Gotowe do wysłania/odbioru”: wszystkie gotowe są w statystykach (tak samo jak dla pozycji wyżej, jedno
+            // zapytanie), z listy panelu bierzemy tylko odbiór osobisty – zwykle kilka zamówień, więc lekkie zapytanie.
+            const pick = todo.filter((c) => c === 'p' || c === 'p_odb');
+            if (pick.length) {
+              try {
+                const t0 = performance.now();
+                const [m, pickup] = await Promise.all([
+                  todo.includes('p') ? getStats() : Promise.resolve(null),
+                  fetchCountPanel('p_odb'),
+                ]);
+                const ms = Math.round(performance.now() - t0);
+                pick.forEach((c) => {
+                  if (c === 'p' && !(m && m.p != null && !isNaN(m.p))) return;
+                  const n = c === 'p_odb' ? pickup : Math.max(0, m.p - pickup);
+                  counts[c] = n;
+                  meta[c] = { n, src: c === 'p_odb' ? 'panel (odbiór osobisty)' : 'statystyki panelu − odbiór osobisty', ms };
+                  fresh[c] = true;
+                  delete errors[c];
+                  updateBadge(c);
+                });
+                save('counts', counts);
+                todo = todo.filter((c) => !fresh[c]);
+              } catch (e) { /* zostają na zwykłej ścieżce niżej (lista panelu) */ }
+            }
+            const panelQ = todo.slice();
             const worker = (queue) => async () => {
               while (queue.length) {
                 const c = queue.shift();
@@ -2312,18 +2209,15 @@ if (url.includes('megadron.pl/pl/products')) {
                   meta[c] = res;
                   fresh[c] = true;
                   delete errors[c];
-                  delete limited[c];
                   save('counts', counts);
                 } catch (e) {
-                  if (e.rate && counts[c] != null) limited[c] = true; // limit API – zostaw ostatnią liczbę, bez ciężkiego zapytania do panelu
-                  else errors[c] = e.message || String(e);
+                  errors[c] = e.message || String(e);
                 }
                 updateBadge(c);
               }
             };
             await Promise.all([
               extraJob,
-              ...Array.from({ length: API_CONCURRENCY }, worker(apiQ)),
               ...Array.from({ length: PANEL_CONCURRENCY }, worker(panelQ)),
             ]);
           }
@@ -2458,12 +2352,7 @@ if (url.includes('megadron.pl/pl/products')) {
             const b = a.querySelector('.tm-badge');
             b.classList.remove('tm-stale', 'tm-err');
             a.title = titleOf(code) + (counts[code] != null ? ` (${counts[code]})` : '');
-            if (limited[code] && !fresh[code] && counts[code] != null) {
-              b.textContent = String(counts[code]);
-              b.classList.add('tm-stale');
-              b.title = 'Limit zapytań API – ostatnia znana liczba';
-              a.title += ' – limit API, ostatnia znana liczba';
-            } else if (errors[code] && !fresh[code]) {
+            if (errors[code] && !fresh[code]) {
               b.textContent = counts[code] != null ? String(counts[code]) : '!';
               b.classList.add('tm-err');
               b.title = 'Błąd pobierania: ' + errors[code];
@@ -2593,9 +2482,6 @@ if (url.includes('megadron.pl/pl/products')) {
                 <div class="tm-md-f">
                   <div class="tm-row"><span>Widok do liczenia</span><select class="tm-view"><option value="">Domyślny (Twój bieżący)</option></select></div>
                   <div class="tm-hint">Widok z mniejszą liczbą kolumn = szybsze liczniki. Nie zmienia widoku listy zamówień.</div>
-                  <div class="tm-row"><span>Klucz API</span><input type="text" class="tm-key" name="tm-idosell-api-key" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other" placeholder="opcjonalny" style="margin:0 0 0 auto;flex:1;max-width:200px"></div>
-                  <div class="tm-row"><button class="tm-btn tm-check" type="button">Sprawdź klucz</button><span class="tm-hint tm-check-out" style="margin-left:4px"></span></div>
-                  <div class="tm-hint">Z kluczem statusy główne liczą się przez Admin API – dużo szybciej. Użyj osobnego klucza tylko z odczytem zamówień. Klucz jest zapisany w Tampermonkey i wysyłany wyłącznie do API tego sklepu.</div>
                   <div class="tm-row">
                     <button class="tm-btn tm-reload" type="button">Odśwież listę statusów</button>
                     <button class="tm-btn tm-primary tm-save" type="button" style="margin-left:auto">Zapisz</button>
@@ -2616,21 +2502,6 @@ if (url.includes('megadron.pl/pl/products')) {
             const listEl = ov.querySelector('.tm-md-list');
             const search = ov.querySelector('.tm-search');
             const viewSel = ov.querySelector('.tm-view');
-            const keyIn = ov.querySelector('.tm-key');
-            const checkOut = ov.querySelector('.tm-check-out');
-            keyIn.value = apiKey;
-            ov.querySelector('.tm-check').addEventListener('click', async () => {
-              const k = keyIn.value.trim();
-              if (!k) { checkOut.textContent = 'Wpisz klucz'; return; }
-              checkOut.textContent = 'Sprawdzam…';
-              const t0 = performance.now();
-              try {
-                const n = await fetchCountApi('new', k);
-                checkOut.textContent = `OK – nieobsłużone: ${n}, ${Math.round(performance.now() - t0)} ms`;
-              } catch (e) {
-                checkOut.textContent = 'Błąd: ' + (e.message || e);
-              }
-            });
             let checked = new Set(selected);
             const draft = { ...names }; // własne nazwy – zapis dopiero po „Zapisz”
 
@@ -2734,12 +2605,6 @@ if (url.includes('megadron.pl/pl/products')) {
               if (newView !== countView) {
                 countView = newView;
                 save('view', countView);
-              }
-              const newKey = keyIn.value.trim();
-              if (newKey !== apiKey) {
-                apiKey = newKey;
-                save('apiKey', apiKey);
-                Object.keys(fresh).forEach((c) => { if (viaApi(c)) delete fresh[c]; }); // przelicz przez nowe źródło
               }
               close();
               render();
