@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.42
+// @version      1.2.43
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -2246,10 +2246,59 @@ if (url.includes('megadron.pl/pl/products')) {
             items.forEach((x) => updateBadge(x.code));
           }
 
+          // Statystyki nowego panelu zamówień: jedno lekkie zapytanie (ok. 2 KB, sesja, bez klucza) z liczbami
+          // wszystkich statusów niezakończonych i ich podstatusów. Wewnętrzne API panelu – przy błędzie liczymy jak dawniej.
+          const STATS_URL = '/panel/api/orders/ordersStatistics/getOrdersCountByStatuses?scope=unfinished';
+          const STATS_CODE = {}; // nazwa statusu w odpowiedzi -> kod panelu
+          Object.keys(API_STATUS).forEach((c) => { STATS_CODE[API_STATUS[c]] = c; });
+          Object.keys(WN_EXTRA_API).forEach((c) => { STATS_CODE[WN_EXTRA_API[c]] = c; });
+          const STATS_BASE = ['n', 'w', 'd', 'o', 'h', 'b', 'p', 'a', 'br', 'wd', 'wp', 'wr']; // statusy niezakończone
+          const statsCovers = (c) => !CUSTOM[c] && !extraOf(c) && (c === 'wn' || STATS_BASE.includes(c.split('-')[0]));
+          async function fetchStats() {
+            const r = await fetch(STATS_URL, { credentials: 'include', headers: { 'Accept': 'application/json' } });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const j = await r.json();
+            const d = j && !j.isError && j.data;
+            const total = d ? parseInt(d.totalCount, 10) : NaN;
+            if (!d || !Array.isArray(d.statuses) || isNaN(total)) throw new Error('nieoczekiwana odpowiedź');
+            const m = { wn: total };
+            d.statuses.forEach((s) => {
+              const c = STATS_CODE[s.status];
+              if (!c) return;
+              m[c] = parseInt(s.ordersCount, 10);
+              (s.subStatuses || []).forEach((x) => { m[c + '-' + x.subStatusId] = parseInt(x.ordersCount, 10); });
+            });
+            return m;
+          }
+
           async function refreshCounts(codes) {
             const pending = codes.filter((c) => !fresh[c]);
-            const todo = pending.filter((c) => !extraOf(c));
+            let todo = pending.filter((c) => !extraOf(c));
             const extraJob = refreshExtras(pending.filter(extraOf));
+            let statsErr = '';
+            const covered = todo.filter(statsCovers);
+            if (covered.length) {
+              const t0 = performance.now();
+              try {
+                const m = await fetchStats();
+                const ms = Math.round(performance.now() - t0);
+                covered.forEach((c) => {
+                  let n = m[c];
+                  if (n == null && c.includes('-') && m[c.split('-')[0]] != null) n = 0; // podstatus bez zamówień
+                  if (n == null || isNaN(n)) return;
+                  counts[c] = n;
+                  meta[c] = { n, src: 'statystyki panelu', ms };
+                  fresh[c] = true;
+                  delete errors[c];
+                  delete limited[c];
+                  updateBadge(c);
+                });
+                save('counts', counts);
+                todo = todo.filter((c) => !fresh[c]);
+              } catch (e) {
+                statsErr = e.message || String(e);
+              }
+            }
             const useApi = (c) => !!(apiKey && viaApi(c));
             const apiQ = todo.filter(useApi);
             const panelQ = todo.filter((c) => !useApi(c));
@@ -2258,6 +2307,7 @@ if (url.includes('megadron.pl/pl/products')) {
                 const c = queue.shift();
                 try {
                   const res = await fetchCount(c);
+                  if (statsErr && statsCovers(c)) res.note = (res.note ? res.note + '; ' : '') + 'statystyki panelu niedostępne: ' + statsErr;
                   counts[c] = res.n;
                   meta[c] = res;
                   fresh[c] = true;
@@ -2421,7 +2471,7 @@ if (url.includes('megadron.pl/pl/products')) {
               b.textContent = String(counts[code]);
               if (!fresh[code]) b.classList.add('tm-stale');
               const m = meta[code];
-              const info = m ? `Źródło: ${m.src}, ${m.ms} ms` + (m.note ? ` (API nie zadziałało: ${m.note})` : '') : '';
+              const info = m ? `Źródło: ${m.src}, ${m.ms} ms` + (m.note ? ` (${m.note})` : '') : '';
               b.title = fresh[code] ? info : 'Ostatnia znana wartość – trwa pobieranie';
               if (info) a.title += ' – ' + info;
             } else {
