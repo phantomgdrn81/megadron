@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.41
+// @version      1.2.42
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1885,6 +1885,963 @@ if (url.includes('megadron.pl/pl/products')) {
     }, true);
         })();
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // STATUSY W PASKU BOCZNYM (sekcja „Statusy” z licznikami zamówień)
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (window.self === window.top && url.includes('/panel/') && !url.includes('/panel/app/client-deliveryaddress.php')) {
+        const tmStatusyStart = () => {
+        (function () {
+          'use strict';
+
+          // ---------- storage ----------
+          const HOST = location.host;
+          const K = (k) => `${HOST}:${k}`;
+          const load = (k, d) => {
+            try { const v = GM_getValue(K(k)); return v === undefined ? d : JSON.parse(v); } catch (e) { return d; }
+          };
+          const save = (k, v) => { try { GM_setValue(K(k), JSON.stringify(v)); } catch (e) { /* ignore */ } };
+
+          const DEFAULT_SELECTED = ['wn', 'n', 'o', 'b', 'p', 'w'];
+          const STATUS_TTL = 24 * 3600 * 1000;
+          const PANEL_CONCURRENCY = 2;   // ciężkie zapytania panelu
+          const API_CONCURRENCY = 3;     // lekkie zapytania Admin API
+          const API_URL = '/api/admin/v8/orders/orders/search';
+
+          // Kod statusu w panelu -> status w Admin API (orders/orders/search, pole ordersStatuses).
+          // Kody bez odpowiednika (br, z, l, r, wd, wp, wr, wn) i podstatusy (np. b-110) liczone są przez panel.
+          const API_STATUS = {
+            n: 'new', o: 'on_order', b: 'packed', p: 'ready', w: 'payment_waiting',
+            d: 'delivery_waiting', h: 'suspended', t: 'finished', j: 'joined',
+            k: 'canceled', i: 'false', s: 'lost', a: 'finished_ext',
+          };
+
+          // „* wszystkie nieobsłużone” (wn) = n+o+b+br+p+w+d+h+wp(+wd+wr) – sprawdzone na sumach z panelu.
+          // Statusy z odpowiednikiem w API liczone jednym zapytaniem, reszta (zwykle kilka zamówień) przez panel.
+          const WN_API = ['new', 'on_order', 'packed', 'ready', 'payment_waiting', 'delivery_waiting', 'suspended'];
+          const WN_PANEL = ['br', 'wp', 'wd', 'wr'];
+          // Pozycje z własnym linkiem i filtrem (licznik liczony przez panel z tymi samymi filtrami, bez operatora).
+          const CUSTOM = {
+            p: {
+              name: 'Gotowe do wysłania',
+              href: '/panel/app/orders-list.php?operator=margal&status=p&omit_personal_collection=y#p1d1v76',
+              query: { status: 'p', omit_personal_collection: 'y' },
+            },
+            p_odb: {
+              name: 'Gotowe do odbioru',
+              href: '/panel/app/orders-list.php?operator=damian&status=po&delivery=0&selling=1',
+              query: { status: 'po', delivery: '0', selling: '1' },
+              color: 'p',
+              urlStatus: 'po',
+            },
+          };
+          // Pozycje, które API być może policzy (filtry kuriera / podstatusu / nazwy wewnętrzne).
+          // Skrypt najpierw porównuje wynik API z panelem; dopiero zgodny wynik (> 0) przełącza pozycję na API na 7 dni.
+          const WN_EXTRA_API = { br: 'packed_ready', wp: 'wait_for_packaging', wd: 'wait_for_dispatch', wr: 'wait_for_receive' };
+          const PICKUP = { ordersStatuses: ['ready'], couriersId: [0] }; // odbiór osobisty = kurier 0
+          function apiPlan(code) {
+            if (code === 'p_odb') return [{ s: 1, p: PICKUP }];
+            if (code === 'p') return [{ s: 1, p: { ordersStatuses: ['ready'] } }, { s: -1, p: PICKUP }];
+            if (CUSTOM[code]) return null;
+            const m = /^([a-z]+)-(\d+)$/.exec(code);
+            const parent = m && (API_STATUS[m[1]] || WN_EXTRA_API[m[1]]); // podstatus np. b-110 (packed) albo br-116 (packed_ready)
+            if (parent) return [{ s: 1, p: { ordersStatuses: [parent], ordersStatusesIds: [+m[2]] } }];
+            if (WN_EXTRA_API[code]) return [{ s: 1, p: { ordersStatuses: [WN_EXTRA_API[code]] } }];
+            return null;
+          }
+          const CHECK_TTL = 7 * 24 * 3600 * 1000;
+          const trusted = (c) => { const st = apiCheck[c]; return !!(st && st.ok === true && Date.now() - st.ts < CHECK_TTL); };
+          const viaApi = (code) => (!CUSTOM[code] && !!(API_STATUS[code] || code === 'wn')) || (!!apiPlan(code) && trusted(code));
+
+          // Pozycje spoza statusów zamówień: liczby z widżetu „Monitor” pulpitu panelu
+          // (POST /panel/api/panel/monitor/getMonitorStats – jedno lekkie zapytanie dla wszystkich).
+          const MONITOR_URL = '/panel/api/panel/monitor/getMonitorStats';
+          const EXTRA = [
+            { code: 'rma:na', name: 'Niezaakceptowane reklamacje', icon: 'assignment_late', group: 'orders', key: 'notAcceptedRMA', page: 'rma.php', params: { action: 'search', show: 'na' } },
+            { code: 'rma:o', name: 'Niezrealizowane reklamacje', icon: 'assignment', group: 'orders', key: 'unfinishedRma', page: 'rma.php', params: { action: 'search', show: 'o' } },
+            { code: 'rma:chat', name: 'Nieodczytane wiadomości – czat reklamacji', icon: 'mark_chat_unread', group: 'orders', key: 'newMsgInRmaChat', page: 'rma.php', params: { action: 'search', newRmaChatMsg: '1' } },
+            { code: 'ret:o', name: 'Niezrealizowane zwroty', icon: 'assignment_return', group: 'orders', key: 'unfinishedReturns', page: 'returns.php', params: { action: 'search', show: 'o' } },
+            { code: 'faq:new', name: 'Pytania do towarów bez odpowiedzi', icon: 'contact_support', group: 'moderator', key: 'productQuestions', page: 'products-faq.php', params: { search: 'new_questions' } },
+          ];
+          const extraOf = (c) => EXTRA.find((x) => x.code === c) || null;
+          const hrefOf = (c) => {
+            const x = extraOf(c);
+            if (x) return '/panel/app/' + x.page + '?' + new URLSearchParams(x.params).toString();
+            if (CUSTOM[c]) return CUSTOM[c].href;
+            return '/panel/app/orders-list.php?status=' + encodeURIComponent(c);
+          };
+
+          // Kolory statusów: panel definiuje zmienne CSS --color-status-<nazwa> (te same co na liście zamówień).
+          const COLOR_NAME = {
+            n: 'new', o: 'on_order', b: 'packed', br: 'packed_ready', p: 'ready', w: 'payment_waiting',
+            d: 'delivery_waiting', h: 'suspended', t: 'finished', j: 'joined', k: 'canceled', i: 'false',
+            s: 'lost', z: 'returned', l: 'missing', r: 'complainted', a: 'finished_ext',
+            wd: 'wait_for_dispatch', wp: 'wait_for_packaging', wr: 'wait_for_receive',
+          };
+          function colorOf(code) {
+            if (CUSTOM[code] && CUSTOM[code].color) code = CUSTOM[code].color;
+            const name = COLOR_NAME[code.split('-')[0]]; // podstatus dziedziczy kolor statusu nadrzędnego
+            if (!name) return null;
+            const v = getComputedStyle(document.documentElement).getPropertyValue('--color-status-' + name).trim();
+            return v || null;
+          }
+
+          let statuses = load('statuses', null);      // {ts, list:[{code,name,sub,parent}], views:[{id,name}]}
+          let selected = load('selected', DEFAULT_SELECTED);
+          let enabled = load('enabled', true);          // suwak w nagłówku: false = sekcja zwinięta, nic nie pobiera
+          let swDown = false;
+          let names = load('names', {});                // własne nazwy pozycji { kod: nazwa } – tylko w tym Tampermonkey
+          let apiCheck = load('apiCheck', {});          // { kod: {ok:true|false|null, ts, miss, why} } – czy API liczy tak jak panel
+          const limited = {};                           // kody, dla których API odpowiedziało 429 w tym załadowaniu
+          // jednorazowo dodaj „Gotowe do odbioru” pod „Gotowe”
+          if (!load('addedPOdb', false) && !selected.includes('p_odb')) {
+            const i = selected.indexOf('p');
+            selected = selected.slice();
+            selected.splice(i >= 0 ? i + 1 : selected.length, 0, 'p_odb');
+            save('selected', selected);
+          }
+          save('addedPOdb', true);
+          let counts = load('counts', {});            // {code: n}
+          let countView = load('view', '');            // '' = domyślny widok użytkownika
+          let apiKey = load('apiKey', '');             // klucz Admin API (opcjonalny, wpisuje użytkownik)
+          const fresh = {};                            // code -> true (pobrane w tym załadowaniu strony)
+          const errors = {};                           // code -> message
+          const meta = {};                             // code -> {src:'API'|'panel', ms, note}
+          let fetchStarted = false;
+
+          // ---------- styles ----------
+          GM_addStyle(`
+            #tm-statusy .tm-hdr{display:flex;align-items:center;cursor:grab}
+            #tm-statusy.tm-section-dragging{opacity:.45}
+            #tm-statusy .tm-gear{margin-left:auto;cursor:pointer;font-size:16px;line-height:1;opacity:.7;border-radius:4px;padding:2px;user-select:none}
+            #tm-statusy .tm-gear:hover{opacity:1;background:rgba(255,255,255,.1)}
+            #tm-statusy a.tm-item{text-decoration:none;color:inherit;display:flex;width:100%;box-sizing:border-box;touch-action:none;user-select:none;-webkit-user-drag:none;transition:transform .18s ease}
+            #tm-statusy a.tm-item.tm-lift{transition:none;position:relative;z-index:2;cursor:grabbing;background:var(--tm-lift-bg,#2c3038);border-radius:6px;box-shadow:0 6px 16px rgba(0,0,0,.35)}
+            #tm-statusy a.tm-item.tm-settle{transition:transform .15s ease;position:relative;z-index:2}
+            #tm-statusy.tm-sorting{cursor:grabbing}
+            #tm-statusy .tm-badge{margin-left:auto;flex:none;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-width:26px;padding:2px 5px;line-height:14px;font-variant-numeric:tabular-nums;text-align:center}
+            #tm-statusy .tm-badge.tm-stale{opacity:.5}
+            #tm-statusy .tm-badge.tm-err{background:rgba(255,80,80,.35)!important}
+            #tm-statusy .tm-empty{font-size:12px;opacity:.6;padding:4px 8px;cursor:pointer}
+            #tm-statusy .--title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+            #tm-statusy.tm-collapsed .tm-hdr span:first-child,
+            #tm-statusy.tm-collapsed .--title,
+            #tm-statusy.tm-collapsed .tm-badge{display:none}
+            #tm-statusy.tm-collapsed .tm-hdr{justify-content:center;padding-left:0;padding-right:0}
+            #tm-statusy.tm-collapsed .tm-gear{margin-left:0}
+            #tm-statusy .tm-sw{margin-left:6px;flex:none;position:relative;width:24px;height:13px;border-radius:7px;background:rgba(255,255,255,.22);cursor:pointer;transition:background .15s}
+            #tm-statusy .tm-sw::after{content:'';position:absolute;top:2px;left:2px;width:9px;height:9px;border-radius:50%;background:#fff;transition:transform .15s}
+            #tm-statusy .tm-sw[aria-checked="true"]{background:#4f8df5}
+            #tm-statusy .tm-sw[aria-checked="true"]::after{transform:translateX(11px)}
+            #tm-statusy.tm-off .tm-hdr > span:first-child{opacity:.55}
+            #tm-statusy.tm-off .tm-sw{margin-left:auto}
+            #tm-statusy.tm-collapsed .tm-hdr{flex-wrap:wrap;gap:4px}
+            #tm-statusy.tm-collapsed .tm-sw{margin:0}
+
+            .tm-ov{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2147483000;display:flex;align-items:center;justify-content:center;font-family:inherit}
+            .tm-md{background:#fff;color:#1f1f22;border-radius:10px;width:380px;max-width:calc(100vw - 32px);max-height:calc(100vh - 64px);display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.3);font-size:13px}
+            .tm-md-h{display:flex;align-items:center;padding:14px 16px 8px;font-size:15px;font-weight:600}
+            .tm-md-h .tm-x{margin-left:auto;cursor:pointer;font-size:20px;opacity:.6}
+            .tm-md-h .tm-x:hover{opacity:1}
+            .tm-md input.tm-search{margin:0 16px 8px;padding:7px 10px;border:1px solid #d6d6db;border-radius:6px;font:inherit}
+            .tm-md input.tm-key{padding:6px 8px;border:1px solid #d6d6db;border-radius:6px;font:inherit;-webkit-text-security:disc;text-security:disc}
+            .tm-md-list{overflow:auto;padding:0 16px;flex:1;min-height:120px}
+            .tm-md-list label{display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer}
+            .tm-md-list .tm-grp{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:#888;padding:10px 0 2px}
+            .tm-md-list .tm-grp:first-child{padding-top:2px}
+            .tm-md-list label.tm-sub{padding-left:22px;color:#555}
+            .tm-md-list label code{margin-left:auto;font-size:11px;color:#999}
+            .tm-md-list .tm-alias{color:#888}
+            .tm-md-list .tm-ren{font-size:16px;opacity:0;cursor:pointer;color:#666;padding:0 2px}
+            .tm-md-list label:hover .tm-ren{opacity:.6}
+            .tm-md-list .tm-ren:hover{opacity:1 !important}
+            .tm-md-list .tm-alias-in{font:inherit;font-size:12px;padding:1px 4px;border:1px solid #bbb;border-radius:3px;width:150px}
+            .tm-md-f{border-top:1px solid #eee;padding:10px 16px 14px;display:flex;flex-direction:column;gap:10px}
+            .tm-row{display:flex;align-items:center;gap:8px}
+            .tm-row select{margin-left:auto;padding:5px 8px;border:1px solid #d6d6db;border-radius:6px;font:inherit;max-width:200px}
+            .tm-hint{font-size:11px;color:#888}
+            .tm-btn{padding:7px 12px;border:1px solid #cfcfd6;border-radius:6px;background:#fff;cursor:pointer;font:inherit}
+            .tm-btn:hover{background:#f3f3f6}
+            .tm-btn.tm-primary{background:#1f1f22;color:#fff;border-color:#1f1f22}
+            .tm-btn.tm-primary:hover{background:#3a3a40}
+          `);
+
+          // ---------- data ----------
+          async function fetchStatuses(force) {
+            if (!force && statuses && Date.now() - statuses.ts < STATUS_TTL && statuses.list.length) return statuses;
+            const html = await (await fetch('/panel/orders-search.php', { credentials: 'include' })).text();
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const sel = doc.querySelector('select[name="status"]');
+            if (!sel) throw new Error('Nie znaleziono listy statusów');
+            const list = [];
+            let parent = '';
+            for (const o of sel.options) {
+              if (!o.value) continue;
+              const raw = o.textContent.trim();
+              const sub = /^--/.test(raw) || /-\d+$/.test(o.value);
+              const name = raw.replace(/^--\s*/, '').replace(/^\*\s*/, '').trim();
+              if (!sub) parent = name;
+              list.push({ code: o.value, name, sub, parent: sub ? parent : '' });
+            }
+            const vs = doc.querySelector('select[name="view"]');
+            const views = vs ? [...vs.options].map((o) => ({ id: o.value, name: o.textContent.trim() })) : [];
+            statuses = { ts: Date.now(), list, views };
+            save('statuses', statuses);
+            return statuses;
+          }
+
+          // filter: kod/tablica statusów API albo obiekt parametrów wyszukiwania (np. z couriersId)
+          async function fetchCountApi(filter, key) {
+            const params = (typeof filter === 'string' || Array.isArray(filter)) ? { ordersStatuses: [].concat(filter) } : filter;
+            const r = await fetch(API_URL, {
+              method: 'POST',
+              credentials: 'omit',
+              headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-API-KEY': key },
+              body: JSON.stringify({ params: { ...params, resultsPage: 0, resultsLimit: 1 } }),
+            });
+            let j = null;
+            try { j = await r.json(); } catch (e) { /* brak JSON */ }
+            if (!r.ok && !(r.status === 404 && j && j.errors)) {
+              const err = new Error('API HTTP ' + r.status + (r.status === 429 ? ' (limit zapytań)' : r.status === 401 || r.status === 403 ? ' (klucz)' : ''));
+              if (r.status === 429) err.rate = true;
+              err.status = r.status;
+              throw err;
+            }
+            if (!j) throw new Error('API: pusta odpowiedź');
+            const n = parseInt(j.resultsNumberAll, 10);
+            if (isNaN(n)) {
+              const fs = j.errors && (j.errors.faultString || j.errors.faultCode);
+              // brak wyników bywa zgłaszany jako błąd "brak danych" – traktuj jako 0
+              if (j.errors && (String(j.errors.faultCode) === '2' || /no results|brak|not found|nie znaleziono/i.test(String(fs)))) return 0;
+              throw new Error('API: ' + (fs || 'brak resultsNumberAll'));
+            }
+            return n;
+          }
+
+          async function planCount(plan) {
+            const ns = await Promise.all(plan.map((x) => fetchCountApi(x.p, apiKey)));
+            return plan.reduce((s, x, i) => s + x.s * ns[i], 0);
+          }
+          function setCheck(code, v) { apiCheck[code] = v; save('apiCheck', apiCheck); }
+
+          // Pozycja z apiPlan: zaufana → samo API; odrzucona → sam panel; w innym razie oba i porównanie (pokazuje panel).
+          async function smartCount(code) {
+            const plan = apiPlan(code);
+            const st = apiCheck[code] || {};
+            const recent = st.ts && Date.now() - st.ts < CHECK_TTL;
+            if (recent && st.ok === true) return { n: await planCount(plan), src: 'API (zgodne z panelem)' };
+            if (recent && st.ok === false) return { n: await fetchCountPanel(code), src: 'panel', note: 'API ≠ panel' + (st.why ? ': ' + st.why : '') };
+            const [pn, ar] = await Promise.all([
+              fetchCountPanel(code),
+              planCount(plan).then((n) => ({ n }), (err) => ({ err })),
+            ]);
+            if (ar.err) {
+              if (ar.err.rate) return { n: pn, src: 'panel – sprawdzam API (limit zapytań)' };
+              const why = ar.err.message || String(ar.err);
+              const s = ar.err.status;
+              // 400/404/422… = API nie zna filtra → od razu panel; sieć, 5xx, 401/403 (klucz) = chwilowe, sprawdzimy znowu
+              if (s >= 400 && s < 500 && s !== 401 && s !== 403) setCheck(code, { ok: false, ts: Date.now(), why });
+              return { n: pn, src: 'panel', note: why };
+            }
+            if (ar.n === pn) {
+              if (pn > 0) { setCheck(code, { ok: true, ts: Date.now() }); return { n: pn, src: 'panel = API – od teraz API' }; }
+              return { n: pn, src: 'panel – sprawdzam API (0 = 0)' };
+            }
+            const miss = (st.ok == null ? (st.miss || 0) : 0) + 1;
+            if (miss >= 2) setCheck(code, { ok: false, ts: Date.now(), why: `API ${ar.n} / panel ${pn}` });
+            else setCheck(code, { ok: null, miss });
+            return { n: pn, src: `panel (API ≠ panel: ${ar.n} / ${pn})` };
+          }
+
+          // Zwraca {n, src, ms, note}; przy błędzie API (poza limitem 429) automatycznie liczy przez panel.
+          async function fetchCount(code) {
+            const t0 = performance.now();
+            const done = (r) => ({ ...r, ms: Math.round(performance.now() - t0) });
+            const apiStatus = CUSTOM[code] ? null : API_STATUS[code];
+            let note = '';
+            if (apiKey && code === 'wn') {
+              try {
+                if (WN_PANEL.every(trusted)) {
+                  const n = await fetchCountApi(WN_API.concat(WN_PANEL.map((c) => WN_EXTRA_API[c])), apiKey);
+                  return done({ n, src: 'API' });
+                }
+                const parts = await Promise.all([
+                  fetchCountApi(WN_API, apiKey),
+                  ...WN_PANEL.map((c) => smartCount(c).then((r) => r.n)),
+                ]);
+                const viaPanel = WN_PANEL.filter((c) => !trusted(c));
+                return done({ n: parts.reduce((s, x) => s + x, 0), src: viaPanel.length ? 'API + panel (' + viaPanel.join(', ') + ')' : 'API' });
+              } catch (e) {
+                if (e.rate) throw e;
+                note = e.message || String(e);
+              }
+            } else if (apiKey && apiStatus) {
+              try {
+                const n = await fetchCountApi(apiStatus, apiKey);
+                return done({ n, src: 'API' });
+              } catch (e) {
+                if (e.rate) throw e;
+                note = e.message || String(e);
+              }
+            } else if (apiKey && apiPlan(code)) {
+              try {
+                return done(await smartCount(code));
+              } catch (e) {
+                if (e.rate) throw e;
+                note = e.message || String(e);
+              }
+            }
+            const t1 = performance.now();
+            const n = await fetchCountPanel(code);
+            return { n, src: 'panel', ms: Math.round(performance.now() - t1), note };
+          }
+
+          async function fetchCountPanel(code) {
+            const q = CUSTOM[code] ? CUSTOM[code].query : { status: code };
+            let body = 'action=ajax&page=1&' + new URLSearchParams(q).toString();
+            if (countView) body += '&view=' + encodeURIComponent(countView);
+            const r = await fetch('/panel/ajax/orders-list-data.php', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' },
+              body,
+            });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const j = await r.json();
+            const n = parseInt(j.totalRecords, 10);
+            if (isNaN(n)) throw new Error('Brak totalRecords');
+            return n;
+          }
+
+          // Jedno zapytanie o wszystkie widoczne pozycje dodatkowe (reklamacje, zwroty, pytania).
+          async function refreshExtras(codes) {
+            const items = codes.map(extraOf).filter(Boolean);
+            if (!items.length) return;
+            const groups = [...new Set(items.map((x) => x.group))];
+            const t0 = performance.now();
+            try {
+              const r = await fetch(MONITOR_URL, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({ monitorFilter: { requestedData: groups } }),
+              });
+              if (!r.ok) throw new Error('HTTP ' + r.status);
+              const j = await r.json();
+              if (j.isError || !j.data) throw new Error((j.errors && j.errors[0] && j.errors[0].message) || 'brak danych');
+              const ms = Math.round(performance.now() - t0);
+              items.forEach((x) => {
+                const n = parseInt((j.data[x.group] || {})[x.key], 10);
+                if (isNaN(n)) { errors[x.code] = 'brak pola ' + x.key; return; }
+                counts[x.code] = n;
+                meta[x.code] = { n, src: 'monitor panelu', ms };
+                fresh[x.code] = true;
+                delete errors[x.code];
+              });
+              save('counts', counts);
+            } catch (e) {
+              items.forEach((x) => { errors[x.code] = e.message || String(e); });
+            }
+            items.forEach((x) => updateBadge(x.code));
+          }
+
+          async function refreshCounts(codes) {
+            const pending = codes.filter((c) => !fresh[c]);
+            const todo = pending.filter((c) => !extraOf(c));
+            const extraJob = refreshExtras(pending.filter(extraOf));
+            const useApi = (c) => !!(apiKey && viaApi(c));
+            const apiQ = todo.filter(useApi);
+            const panelQ = todo.filter((c) => !useApi(c));
+            const worker = (queue) => async () => {
+              while (queue.length) {
+                const c = queue.shift();
+                try {
+                  const res = await fetchCount(c);
+                  counts[c] = res.n;
+                  meta[c] = res;
+                  fresh[c] = true;
+                  delete errors[c];
+                  delete limited[c];
+                  save('counts', counts);
+                } catch (e) {
+                  if (e.rate && counts[c] != null) limited[c] = true; // limit API – zostaw ostatnią liczbę, bez ciężkiego zapytania do panelu
+                  else errors[c] = e.message || String(e);
+                }
+                updateBadge(c);
+              }
+            };
+            await Promise.all([
+              extraJob,
+              ...Array.from({ length: API_CONCURRENCY }, worker(apiQ)),
+              ...Array.from({ length: PANEL_CONCURRENCY }, worker(panelQ)),
+            ]);
+          }
+
+          // ---------- helpers ----------
+          const statusByCode = (c) => (statuses && statuses.list.find((s) => s.code === c)) || null;
+          const baseLabel = (c) => { const x = extraOf(c); if (x) return x.name; if (CUSTOM[c]) return CUSTOM[c].name; const s = statusByCode(c); return s ? s.name : c; };
+          const baseTitle = (c) => { const x = extraOf(c); if (x) return x.name; if (CUSTOM[c]) return CUSTOM[c].name; const s = statusByCode(c); return s ? (s.sub ? `${s.parent} › ${s.name}` : s.name) : c; };
+          const labelOf = (c) => names[c] || baseLabel(c);
+          const titleOf = (c) => names[c] ? `${names[c]} – ${baseTitle(c)}` : baseTitle(c);
+
+          // Która pozycja jest aktywna: status zamówień albo pozycja dodatkowa (dopasowanie strony i parametrów).
+          function currentCode() {
+            const st = currentStatus();
+            if (st !== null) return st;
+            const urls = [location.href];
+            document.querySelectorAll('iframe').forEach((f) => { if (f.src) urls.push(f.src); });
+            for (const href of urls) {
+              let u;
+              try { u = new URL(href, location.href); } catch (e) { continue; }
+              const x = EXTRA.find((e) => u.pathname.endsWith('/' + e.page) &&
+                Object.entries(e.params).every(([k, v]) => u.searchParams.get(k) === v) &&
+                // show=o nie może pasować do adresu z newRmaChatMsg
+                !(e.params.show && u.searchParams.get('newRmaChatMsg')));
+              if (x) return x.code;
+            }
+            return null;
+          }
+
+          function currentStatus() {
+            try {
+              const u = new URL(location.href);
+              if (!/orders-list\.php/.test(u.pathname)) return null;
+              const st = u.searchParams.get('status');
+              const f = document.querySelector('iframe[src*="orders-list.php"]');
+              const v = st !== null ? st : f ? new URL(f.src, location.href).searchParams.get('status') : null;
+              const c = Object.keys(CUSTOM).find((k) => CUSTOM[k].urlStatus && CUSTOM[k].urlStatus === v);
+              return c || v;
+            } catch (e) { /* ignore */ }
+            return null;
+          }
+
+          function navClasses(nav) {
+            const btns = [...nav.querySelectorAll('button')];
+            const freq = {};
+            btns.forEach((b) => { freq[b.className] = (freq[b.className] || 0) + 1; });
+            const sorted = Object.keys(freq).sort((a, b) => freq[b] - freq[a]);
+            const item = sorted[0] || '';
+            // aktywny = klasa z tym samym prefiksem sc-*, ale inna
+            const prefix = item.split(' ')[0];
+            const active = sorted.find((c) => c !== item && c.split(' ')[0] === prefix) || item;
+            const icon = (nav.querySelector('.--icon') || {}).className || 'material-symbols-outlined --icon';
+            const hdr = (nav.querySelector(':scope > div > div:not([class*="sc-"])') || {}).className || 'p-2 text-xs leading-4 font-medium';
+            const badge = (nav.querySelector('button span.rounded-sm') || {}).className || 'rounded-sm px-1 py-0.5 text-xs font-medium';
+            return { item, active, icon, hdr, badge };
+          }
+
+          // ---------- render ----------
+          let cls = null;
+          let section = null;
+
+          function buildSection(nav) {
+            cls = navClasses(nav);
+            section = document.createElement('div');
+            section.id = 'tm-statusy';
+            section.className = 'p-2';
+            render();
+            return section;
+          }
+
+          function render() {
+            if (!section) return;
+            const active = currentCode();
+            section.innerHTML = '';
+
+            const hdr = document.createElement('div');
+            hdr.className = cls.hdr + ' tm-hdr';
+            // suwak zawsze ostatni (stałe miejsce), zębatka przed nim tylko gdy włączone
+            hdr.innerHTML = `<span>Statusy</span>` +
+              (enabled ? `<span class="material-symbols-outlined notranslate tm-gear" title="Wybierz widoczne statusy">settings</span>` : '') +
+              `<span class="tm-sw" role="switch"></span>`;
+            const sw = hdr.querySelector('.tm-sw');
+            sw.setAttribute('aria-checked', String(enabled));
+            sw.title = enabled ? 'Wyłącz statusy (bez pobierania danych)' : 'Włącz statusy';
+            sw.addEventListener('pointerdown', (e) => { swDown = true; e.stopPropagation(); });
+            sw.addEventListener('mousedown', (e) => e.stopPropagation());
+            sw.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); swDown = false; setEnabled(!enabled); });
+            if (enabled) hdr.querySelector('.tm-gear').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openSettings(); });
+            wireSectionDrag(hdr);
+            section.appendChild(hdr);
+            section.classList.toggle('tm-off', !enabled);
+            if (!enabled) return; // wyłączone: sam nagłówek z suwakiem, bez pozycji i bez pobierania
+
+            if (!selected.length) {
+              const em = document.createElement('div');
+              em.className = 'tm-empty';
+              em.textContent = 'Wybierz statusy (zębatka)';
+              em.addEventListener('click', openSettings);
+              section.appendChild(em);
+              return;
+            }
+
+            selected.forEach((code) => {
+              const a = document.createElement('a');
+              a.className = (code === active ? cls.active : cls.item) + ' tm-item';
+              a.href = hrefOf(code);
+              a.dataset.code = code;
+              a.draggable = false;
+              a.title = titleOf(code);
+              const x = extraOf(code);
+              a.innerHTML =
+                `<span class="${cls.icon}">${x ? x.icon : 'label'}</span>` +
+                `<span class="--title mr-auto"></span>` +
+                `<span class="${cls.badge} tm-badge"></span>`;
+              a.querySelector('.--title').textContent = labelOf(code);
+              const col = x ? null : colorOf(code);
+              if (col) {
+                const ic = a.querySelector('.--icon');
+                ic.style.color = col;
+                ic.style.fontVariationSettings = "'FILL' 1"; // wypełniona etykieta w kolorze statusu
+              }
+              section.appendChild(a);
+              wireDrag(a);
+            });
+            selected.forEach(updateBadge);
+          }
+
+          function updateBadge(code) {
+            if (!section) return;
+            const a = section.querySelector(`a.tm-item[data-code="${CSS.escape(code)}"]`);
+            if (!a) return;
+            const b = a.querySelector('.tm-badge');
+            b.classList.remove('tm-stale', 'tm-err');
+            a.title = titleOf(code) + (counts[code] != null ? ` (${counts[code]})` : '');
+            if (limited[code] && !fresh[code] && counts[code] != null) {
+              b.textContent = String(counts[code]);
+              b.classList.add('tm-stale');
+              b.title = 'Limit zapytań API – ostatnia znana liczba';
+              a.title += ' – limit API, ostatnia znana liczba';
+            } else if (errors[code] && !fresh[code]) {
+              b.textContent = counts[code] != null ? String(counts[code]) : '!';
+              b.classList.add('tm-err');
+              b.title = 'Błąd pobierania: ' + errors[code];
+            } else if (counts[code] != null) {
+              b.textContent = String(counts[code]);
+              if (!fresh[code]) b.classList.add('tm-stale');
+              const m = meta[code];
+              const info = m ? `Źródło: ${m.src}, ${m.ms} ms` + (m.note ? ` (API nie zadziałało: ${m.note})` : '') : '';
+              b.title = fresh[code] ? info : 'Ostatnia znana wartość – trwa pobieranie';
+              if (info) a.title += ' – ' + info;
+            } else {
+              b.textContent = '…';
+              b.title = 'Trwa pobieranie';
+            }
+          }
+
+          function updateActive() {
+            if (!section || !cls) return;
+            const active = currentCode();
+            section.querySelectorAll('a.tm-item').forEach((a) => {
+              const want = (a.dataset.code === active ? cls.active : cls.item) + ' tm-item';
+              if (a.className.replace(/\s*tm-(lift|settle)/g, '') !== want) a.className = want;
+            });
+          }
+
+          // ---------- przeciąganie: cały wiersz jedzie za kursorem, pozostałe płynnie robią miejsce ----------
+          // Dopóki ruch < 5 px, to zwykły klik (link do statusu).
+          let dragCode = null;
+          let justDragged = false;
+
+          function wireDrag(a) {
+            a.addEventListener('pointerdown', (e) => {
+              if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
+              const items = [...section.querySelectorAll('a.tm-item')];
+              const i = items.indexOf(a);
+              if (items.length < 2 || i < 0) return;
+              e.preventDefault();
+              const tops = items.map((x) => x.getBoundingClientRect().top);
+              const step = tops[1] - tops[0];
+              const minDy = tops[0] - tops[i];
+              const maxDy = tops[items.length - 1] - tops[i];
+              const y0 = e.clientY;
+              let dragging = false;
+              let to = i;
+
+              const place = (n) => items.forEach((x, j) => {
+                if (j === i) return;
+                const shift = (i < n && j > i && j <= n) ? -step : (n < i && j >= n && j < i) ? step : 0;
+                x.style.transform = shift ? `translateY(${shift}px)` : '';
+              });
+              const finish = () => {
+                window.removeEventListener('pointermove', onMove, true);
+                window.removeEventListener('pointerup', onUp, true);
+                window.removeEventListener('pointercancel', cancel, true);
+                window.removeEventListener('keydown', onKey, true);
+                section.classList.remove('tm-sorting');
+                dragCode = null;
+              };
+              const cancel = () => {
+                finish();
+                a.classList.remove('tm-lift');
+                items.forEach((x) => { x.style.transform = ''; });
+              };
+              const onKey = (ev) => { if (ev.key === 'Escape' && dragging) { ev.stopPropagation(); cancel(); } };
+              const onMove = (ev) => {
+                const dy = ev.clientY - y0;
+                if (!dragging) {
+                  if (Math.abs(dy) < 5) return;
+                  dragging = true;
+                  dragCode = a.dataset.code;
+                  // tło paska pod uniesionym wierszem, żeby nie prześwitywały sąsiednie
+                  for (let x = section; x; x = x.parentElement) {
+                    const bg = getComputedStyle(x).backgroundColor;
+                    if (bg && bg !== 'transparent' && !/rgba\(.*,\s*0\)$/.test(bg)) { a.style.setProperty('--tm-lift-bg', bg); break; }
+                  }
+                  a.classList.add('tm-lift');
+                  section.classList.add('tm-sorting');
+                  window.addEventListener('keydown', onKey, true);
+                }
+                const d = Math.max(minDy, Math.min(maxDy, dy));
+                a.style.transform = `translateY(${d}px)`;
+                const n = Math.max(0, Math.min(items.length - 1, Math.round(i + d / step)));
+                if (n !== to) { to = n; place(to); }
+              };
+              const onUp = (ev) => {
+                if (!dragging && Math.abs(ev.clientY - y0) >= 5) onMove(ev); // szybki ruch bez pośrednich pozycji
+                if (!dragging) { finish(); return; }
+                finish();
+                // puszczenie po przeciągnięciu nie może otworzyć linku
+                justDragged = true;
+                setTimeout(() => { justDragged = false; }, 150);
+                a.classList.remove('tm-lift');
+                a.classList.add('tm-settle');
+                a.style.transform = `translateY(${(to - i) * step}px)`;
+                setTimeout(() => {
+                  if (to !== i) {
+                    const list = selected.slice();
+                    const [moved] = list.splice(i, 1);
+                    list.splice(to, 0, moved);
+                    selected = list;
+                    save('selected', selected);
+                  }
+                  render();
+                }, 160);
+              };
+              window.addEventListener('pointermove', onMove, true);
+              window.addEventListener('pointerup', onUp, true);
+              window.addEventListener('pointercancel', cancel, true);
+            });
+            a.addEventListener('dragstart', (e) => e.preventDefault());
+          }
+
+          // click po przeciągnięciu trafia czasem w inny wiersz – blokujemy go na całej sekcji
+          document.addEventListener('click', (e) => {
+            if (justDragged && section && section.contains(e.target)) { e.preventDefault(); e.stopPropagation(); }
+          }, true);
+
+          // ---------- settings modal ----------
+          async function openSettings() {
+            const ov = document.createElement('div');
+            ov.className = 'tm-ov';
+            ov.innerHTML = `
+              <div class="tm-md" role="dialog" aria-label="Widoczne statusy">
+                <div class="tm-md-h">Widoczne pozycje<span class="material-symbols-outlined notranslate tm-x" title="Zamknij">close</span></div>
+                <input type="search" class="tm-search" name="tm-status-filter" autocomplete="off" data-lpignore="true" data-1p-ignore placeholder="Szukaj statusu">
+                <div class="tm-md-list">Ładowanie statusów…</div>
+                <div class="tm-md-f">
+                  <div class="tm-row"><span>Widok do liczenia</span><select class="tm-view"><option value="">Domyślny (Twój bieżący)</option></select></div>
+                  <div class="tm-hint">Widok z mniejszą liczbą kolumn = szybsze liczniki. Nie zmienia widoku listy zamówień.</div>
+                  <div class="tm-row"><span>Klucz API</span><input type="text" class="tm-key" name="tm-idosell-api-key" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other" placeholder="opcjonalny" style="margin:0 0 0 auto;flex:1;max-width:200px"></div>
+                  <div class="tm-row"><button class="tm-btn tm-check" type="button">Sprawdź klucz</button><span class="tm-hint tm-check-out" style="margin-left:4px"></span></div>
+                  <div class="tm-hint">Z kluczem statusy główne liczą się przez Admin API – dużo szybciej. Użyj osobnego klucza tylko z odczytem zamówień. Klucz jest zapisany w Tampermonkey i wysyłany wyłącznie do API tego sklepu.</div>
+                  <div class="tm-row">
+                    <button class="tm-btn tm-reload" type="button">Odśwież listę statusów</button>
+                    <button class="tm-btn tm-primary tm-save" type="button" style="margin-left:auto">Zapisz</button>
+                  </div>
+                </div>
+              </div>`;
+            document.body.appendChild(ov);
+            const close = () => { ov.remove(); document.removeEventListener('keydown', onKey, true); };
+            const onKey = (e) => {
+              if (e.key !== 'Escape') return;
+              if (e.target && e.target.classList && e.target.classList.contains('tm-alias-in')) return; // Esc w polu nazwy = anuluj edycję
+              e.stopPropagation(); close();
+            };
+            document.addEventListener('keydown', onKey, true);
+            ov.addEventListener('mousedown', (e) => { if (e.target === ov) close(); });
+            ov.querySelector('.tm-x').addEventListener('click', close);
+
+            const listEl = ov.querySelector('.tm-md-list');
+            const search = ov.querySelector('.tm-search');
+            const viewSel = ov.querySelector('.tm-view');
+            const keyIn = ov.querySelector('.tm-key');
+            const checkOut = ov.querySelector('.tm-check-out');
+            keyIn.value = apiKey;
+            ov.querySelector('.tm-check').addEventListener('click', async () => {
+              const k = keyIn.value.trim();
+              if (!k) { checkOut.textContent = 'Wpisz klucz'; return; }
+              checkOut.textContent = 'Sprawdzam…';
+              const t0 = performance.now();
+              try {
+                const n = await fetchCountApi('new', k);
+                checkOut.textContent = `OK – nieobsłużone: ${n}, ${Math.round(performance.now() - t0)} ms`;
+              } catch (e) {
+                checkOut.textContent = 'Błąd: ' + (e.message || e);
+              }
+            });
+            let checked = new Set(selected);
+            const draft = { ...names }; // własne nazwy – zapis dopiero po „Zapisz”
+
+            const fill = () => {
+              listEl.innerHTML = '';
+              const custom = Object.keys(CUSTOM)
+                .filter((c) => !statuses.list.some((s) => s.code === c))
+                .map((c) => ({ code: c, name: CUSTOM[c].name, sub: false, parent: '' }));
+              const extras = EXTRA.map((x, i) => ({ code: x.code, name: x.name, sub: false, parent: 'reklamacje zwroty pytania', grp: i === 0 ? 'Reklamacje, zwroty, pytania' : '' }));
+              const orders = custom.concat(statuses.list);
+              if (orders.length) orders[0] = { ...orders[0], grp: 'Statusy zamówień' };
+              extras.concat(orders).forEach((s) => {
+                if (s.grp) {
+                  const g = document.createElement('div');
+                  g.className = 'tm-grp';
+                  g.textContent = s.grp;
+                  listEl.appendChild(g);
+                }
+                const name = CUSTOM[s.code] ? CUSTOM[s.code].name : s.name;
+                const l = document.createElement('label');
+                if (s.sub) l.className = 'tm-sub';
+                const setQ = () => { l.dataset.q = (name + ' ' + (draft[s.code] || '') + ' ' + s.parent + ' ' + s.code).toLowerCase(); };
+                setQ();
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = checked.has(s.code);
+                cb.addEventListener('change', () => { cb.checked ? checked.add(s.code) : checked.delete(s.code); });
+                const t = document.createElement('span');
+                t.textContent = name;
+                const al = document.createElement('span');
+                al.className = 'tm-alias';
+                const showAlias = () => { al.textContent = draft[s.code] ? `(${draft[s.code]})` : ''; };
+                showAlias();
+                const ren = document.createElement('span');
+                ren.className = 'material-symbols-outlined notranslate tm-ren';
+                ren.textContent = 'edit';
+                ren.title = 'Własna nazwa (widoczna tylko u Ciebie)';
+                ren.addEventListener('click', (e) => {
+                  e.preventDefault(); e.stopPropagation();
+                  if (l.querySelector('.tm-alias-in')) return;
+                  const inp = document.createElement('input');
+                  inp.type = 'text';
+                  inp.className = 'tm-alias-in';
+                  inp.placeholder = 'własna nazwa';
+                  inp.autocomplete = 'off';
+                  inp.value = draft[s.code] || '';
+                  al.replaceWith(inp);
+                  ren.style.display = 'none';
+                  let done = false;
+                  const finish = (ok) => {
+                    if (done) return; done = true;
+                    if (ok) { const v = inp.value.trim(); if (v) draft[s.code] = v; else delete draft[s.code]; }
+                    showAlias(); setQ();
+                    inp.replaceWith(al);
+                    ren.style.display = '';
+                  };
+                  inp.addEventListener('click', (ev) => ev.preventDefault()); // nie przełączaj checkboxa
+                  inp.addEventListener('keydown', (ev) => {
+                    if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+                    else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); finish(false); }
+                  });
+                  inp.addEventListener('blur', () => finish(true));
+                  inp.focus(); inp.select();
+                });
+                const c = document.createElement('code');
+                c.textContent = extraOf(s.code) ? '' : s.code;
+                l.append(cb, t, al, ren, c);
+                listEl.appendChild(l);
+              });
+              viewSel.length = 1;
+              (statuses.views || []).forEach((v) => {
+                const o = document.createElement('option');
+                o.value = v.id; o.textContent = v.name;
+                viewSel.appendChild(o);
+              });
+              viewSel.value = countView || '';
+              applyFilter();
+            };
+            const applyFilter = () => {
+              const q = search.value.trim().toLowerCase();
+              listEl.querySelectorAll('label').forEach((l) => { l.style.display = !q || l.dataset.q.includes(q) ? '' : 'none'; });
+              listEl.querySelectorAll('.tm-grp').forEach((g) => { g.style.display = q ? 'none' : ''; });
+            };
+            search.addEventListener('input', applyFilter);
+
+            ov.querySelector('.tm-reload').addEventListener('click', async () => {
+              listEl.textContent = 'Ładowanie statusów…';
+              try { await fetchStatuses(true); fill(); render(); } catch (e) { listEl.textContent = 'Nie udało się pobrać statusów: ' + e.message; }
+            });
+
+            ov.querySelector('.tm-save').addEventListener('click', () => {
+              // zachowaj dotychczasową kolejność, nowe dopisz na końcu w kolejności IdoSell
+              const order = EXTRA.map((x) => x.code).concat(Object.keys(CUSTOM), statuses.list.map((s) => s.code));
+              const kept = selected.filter((c) => checked.has(c));
+              const added = order.filter((c) => checked.has(c) && !kept.includes(c));
+              selected = kept.concat(added);
+              save('selected', selected);
+              names = { ...draft };
+              save('names', names);
+              const newView = viewSel.value;
+              if (newView !== countView) {
+                countView = newView;
+                save('view', countView);
+              }
+              const newKey = keyIn.value.trim();
+              if (newKey !== apiKey) {
+                apiKey = newKey;
+                save('apiKey', apiKey);
+                Object.keys(fresh).forEach((c) => { if (viaApi(c)) delete fresh[c]; }); // przelicz przez nowe źródło
+              }
+              close();
+              render();
+              refreshCounts(selected); // tylko statusy, które nie zostały jeszcze pobrane w tym załadowaniu
+            });
+
+            try { await fetchStatuses(false); fill(); search.focus(); } catch (e) { listEl.textContent = 'Nie udało się pobrać statusów: ' + e.message; }
+          }
+
+          // ---------- położenie sekcji (przeciąganie nagłówka) ----------
+          // sectionPos = indeks natywnej sekcji, przed którą stoi „Statusy”:
+          // 1 = przed „Kanały sprzedaży”, 2 = przed „Aplikacje”, 3 = przed „Ustawienia” (pod „Aplikacje”).
+          let sectionPos = load('sectionPos', null);
+          let sectionDragging = false;
+          let dropIdx = null;
+          let dropLine = null;
+
+          const natives = (nav) => [...nav.children].filter((d) => d !== section);
+          function maxPos(nat) {
+            const b = nat.findIndex((d) => d.classList.contains('mt-auto'));
+            return b >= 0 ? b : nat.length;
+          }
+          function placeSection(nav) {
+            const nat = natives(nav);
+            const max = maxPos(nat);
+            let idx = sectionPos;
+            if (idx == null) {
+              const apps = nat.findIndex((d) => /^\s*Aplikacje\s*$/.test((d.firstElementChild || {}).textContent || ''));
+              idx = apps >= 0 ? apps : max - 1;
+            }
+            idx = Math.min(Math.max(1, idx), max);
+            const ref = nat[idx] || null;
+            if (section.parentElement !== nav || section.nextElementSibling !== ref) nav.insertBefore(section, ref);
+          }
+
+          function showLine(y, nav) {
+            if (!dropLine) {
+              dropLine = document.createElement('div');
+              dropLine.style.cssText = 'position:fixed;height:2px;background:#6ea8ff;border-radius:1px;z-index:2147483000;pointer-events:none';
+              document.body.appendChild(dropLine);
+            }
+            const r = nav.getBoundingClientRect();
+            dropLine.style.left = r.left + 8 + 'px';
+            dropLine.style.width = r.width - 16 + 'px';
+            dropLine.style.top = y - 1 + 'px';
+            dropLine.style.display = 'block';
+          }
+          function hideLine() { if (dropLine) dropLine.style.display = 'none'; }
+
+          const wiredNavs = new WeakSet();
+          function wireNav(nav) {
+            if (wiredNavs.has(nav)) return;
+            wiredNavs.add(nav);
+            nav.addEventListener('dragover', (e) => {
+              if (!sectionDragging) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+              const nat = natives(nav);
+              const max = maxPos(nat);
+              let best = null;
+              let bestY = 0;
+              for (let i = 1; i <= max; i++) {
+                // ostatnie miejsce (przed „Ustawienia”, które jest przyklejone do dołu) = tuż pod poprzednią sekcją
+                const y = i < max && nat[i] ? nat[i].getBoundingClientRect().top : nat[i - 1].getBoundingClientRect().bottom;
+                if (best === null || Math.abs(e.clientY - y) < Math.abs(e.clientY - bestY)) { best = i; bestY = y; }
+              }
+              dropIdx = best;
+              showLine(bestY, nav);
+            });
+            nav.addEventListener('drop', (e) => {
+              if (!sectionDragging) return;
+              e.preventDefault();
+              if (dropIdx != null) {
+                sectionPos = dropIdx;
+                save('sectionPos', sectionPos);
+                placeSection(nav);
+              }
+              hideLine();
+            });
+          }
+
+          function wireSectionDrag(hdr) {
+            hdr.draggable = true;
+            hdr.title = 'Przeciągnij, aby przenieść sekcję';
+            hdr.addEventListener('dragstart', (e) => {
+              if (swDown) { e.preventDefault(); swDown = false; return; } // klik w suwak nie przesuwa sekcji
+              if (dragCode) return;
+              sectionDragging = true;
+              dropIdx = null;
+              section.classList.add('tm-section-dragging');
+              e.dataTransfer.effectAllowed = 'move';
+              try { e.dataTransfer.setData('text/plain', 'tm-statusy'); } catch (err) { /* ignore */ }
+            });
+            hdr.addEventListener('dragend', () => {
+              sectionDragging = false;
+              section.classList.remove('tm-section-dragging');
+              hideLine();
+            });
+          }
+
+          // ---------- mount ----------
+          function mount() {
+            const nav = document.getElementById('Nav');
+            if (!nav) return;
+            if (section && nav.contains(section)) return;
+            if (!(section && cls)) buildSection(nav);
+            wireNav(nav);
+            placeSection(nav);
+            if (!fetchStarted && enabled) startFetch();
+          }
+
+          function startFetch() {
+            fetchStarted = true;
+            fetchStatuses(false).then(render).catch(() => {}).finally(() => { if (enabled) refreshCounts(selected); });
+          }
+
+          // Suwak w nagłówku: wyłączone = brak pozycji i żadnych zapytań (zapis per przeglądarka / Tampermonkey).
+          function setEnabled(on) {
+            enabled = on;
+            save('enabled', enabled);
+            render();
+            if (!enabled) return;
+            if (!fetchStarted) startFetch();
+            else refreshCounts(selected); // policzy tylko to, czego nie pobrano jeszcze w tym załadowaniu strony
+          }
+
+          // Zwinięty pasek: React usuwa teksty nagłówków i etykiet w natywnych sekcjach
+          function syncCollapsed() {
+            const nav = document.getElementById('Nav');
+            if (!nav || !section) return;
+            const collapsed = !nav.querySelector(':scope > div:not(#tm-statusy) .--title');
+            section.classList.toggle('tm-collapsed', collapsed);
+          }
+
+          let lastHref = '';
+          const tick = () => {
+            mount();
+            syncCollapsed();
+            if (location.href !== lastHref) { lastHref = location.href; updateActive(); }
+          };
+          new MutationObserver(() => { tick(); }).observe(document.body, { childList: true, subtree: true });
+          setInterval(() => { updateActive(); }, 1500);
+          tick();
+        })();
+        };
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', tmStatusyStart, { once: true });
+        } else {
+            tmStatusyStart();
+        }
+    }
+
 
     // ════════════════════════════════════════════════════════════════════════
     // ALLEGRO SALES CENTER – CZAT Z KUPUJĄCYM (guzik w lewym dolnym rogu)
