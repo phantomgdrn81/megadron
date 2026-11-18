@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.44
+// @version      1.2.45
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1979,7 +1979,7 @@ if (url.includes('megadron.pl/pl/products')) {
           }
           save('addedPOdb', true);
           let counts = load('counts', {});            // {code: n}
-          let countView = load('view', '');            // '' = domyślny widok użytkownika
+          if (load('view', '')) save('view', ''); // 1.2.45: bez „Widoku do liczenia” – sprzątamy stare ustawienie
           const fresh = {};                            // code -> true (pobrane w tym załadowaniu strony)
           const errors = {};                           // code -> message
           const meta = {};                             // code -> {src:'API'|'panel', ms, note}
@@ -2058,9 +2058,7 @@ if (url.includes('megadron.pl/pl/products')) {
               if (!sub) parent = name;
               list.push({ code: o.value, name, sub, parent: sub ? parent : '' });
             }
-            const vs = doc.querySelector('select[name="view"]');
-            const views = vs ? [...vs.options].map((o) => ({ id: o.value, name: o.textContent.trim() })) : [];
-            statuses = { ts: Date.now(), list, views };
+            statuses = { ts: Date.now(), list };
             save('statuses', statuses);
             return statuses;
           }
@@ -2075,7 +2073,6 @@ if (url.includes('megadron.pl/pl/products')) {
           async function fetchCountPanel(code) {
             const q = CUSTOM[code] ? CUSTOM[code].query : { status: code };
             let body = 'action=ajax&page=1&' + new URLSearchParams(q).toString();
-            if (countView) body += '&view=' + encodeURIComponent(countView);
             const r = await fetch('/panel/ajax/orders-list-data.php', {
               method: 'POST',
               credentials: 'include',
@@ -2480,8 +2477,6 @@ if (url.includes('megadron.pl/pl/products')) {
                 <input type="search" class="tm-search" name="tm-status-filter" autocomplete="off" data-lpignore="true" data-1p-ignore placeholder="Szukaj statusu">
                 <div class="tm-md-list">Ładowanie statusów…</div>
                 <div class="tm-md-f">
-                  <div class="tm-row"><span>Widok do liczenia</span><select class="tm-view"><option value="">Domyślny (Twój bieżący)</option></select></div>
-                  <div class="tm-hint">Widok z mniejszą liczbą kolumn = szybsze liczniki. Nie zmienia widoku listy zamówień.</div>
                   <div class="tm-row">
                     <button class="tm-btn tm-reload" type="button">Odśwież listę statusów</button>
                     <button class="tm-btn tm-primary tm-save" type="button" style="margin-left:auto">Zapisz</button>
@@ -2501,7 +2496,6 @@ if (url.includes('megadron.pl/pl/products')) {
 
             const listEl = ov.querySelector('.tm-md-list');
             const search = ov.querySelector('.tm-search');
-            const viewSel = ov.querySelector('.tm-view');
             let checked = new Set(selected);
             const draft = { ...names }; // własne nazwy – zapis dopiero po „Zapisz”
 
@@ -2571,13 +2565,6 @@ if (url.includes('megadron.pl/pl/products')) {
                 l.append(cb, t, al, ren, c);
                 listEl.appendChild(l);
               });
-              viewSel.length = 1;
-              (statuses.views || []).forEach((v) => {
-                const o = document.createElement('option');
-                o.value = v.id; o.textContent = v.name;
-                viewSel.appendChild(o);
-              });
-              viewSel.value = countView || '';
               applyFilter();
             };
             const applyFilter = () => {
@@ -2601,11 +2588,6 @@ if (url.includes('megadron.pl/pl/products')) {
               save('selected', selected);
               names = { ...draft };
               save('names', names);
-              const newView = viewSel.value;
-              if (newView !== countView) {
-                countView = newView;
-                save('view', countView);
-              }
               close();
               render();
               refreshCounts(selected); // tylko statusy, które nie zostały jeszcze pobrane w tym załadowaniu
