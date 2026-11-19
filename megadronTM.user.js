@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.47
+// @version      1.2.48
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1534,8 +1534,13 @@
 
     if (url.includes('/panel/orders-list.php')) {
         // Tekst notatek ma znaki nowej linii, ale panel wyświetla go z white-space:normal (sklejone w jedną linię).
-        // display:block + text-align:left – tekst wyrównany do lewej zamiast do środka komórki
-        GM_addStyle('a[data-function_delegate="TextareaEdit"] { display: block; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; }');
+        // display:block – wyrównanie tekstu wg ustawienia z zębatki Statusów (klucz `${host}:noteAlign`, domyślnie do lewej)
+        GM_addStyle('a[data-function_delegate="TextareaEdit"] { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }');
+        let noteAlign = 'left';
+        try { noteAlign = JSON.parse(GM_getValue(location.host + ':noteAlign') || '"left"'); } catch (e) { /* domyślnie */ }
+        if (!['left', 'center', 'right'].includes(noteAlign)) noteAlign = 'left';
+        const alignStyle = GM_addStyle(`a[data-function_delegate="TextareaEdit"] { text-align: ${noteAlign}; }`);
+        if (alignStyle) alignStyle.id = 'tm-note-align'; // zębatka w głównym oknie podmienia ten styl po „Zapisz”
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -1989,6 +1994,12 @@ if (url.includes('megadron.pl/pl/products')) {
             .tm-row{display:flex;align-items:center;gap:8px}
             .tm-row select{margin-left:auto;padding:5px 8px;border:1px solid #d6d6db;border-radius:6px;font:inherit;max-width:200px}
             .tm-hint{font-size:11px;color:#888}
+            .tm-align{margin-left:auto;display:inline-flex;border:1px solid #cfcfd6;border-radius:6px;overflow:hidden}
+            .tm-align button{border:0;background:#fff;padding:3px 7px;cursor:pointer;line-height:1;color:#555}
+            .tm-align button + button{border-left:1px solid #cfcfd6}
+            .tm-align button:hover{background:#f3f3f6}
+            .tm-align button.on{background:#1f1f22;color:#fff}
+            .tm-align .material-symbols-outlined{font-size:18px;vertical-align:middle}
             .tm-btn{padding:7px 12px;border:1px solid #cfcfd6;border-radius:6px;background:#fff;cursor:pointer;font:inherit}
             .tm-btn:hover{background:#f3f3f6}
             .tm-btn.tm-primary{background:#1f1f22;color:#fff;border-color:#1f1f22}
@@ -2421,6 +2432,20 @@ if (url.includes('megadron.pl/pl/products')) {
             if (justDragged && section && section.contains(e.target)) { e.preventDefault(); e.stopPropagation(); }
           }, true);
 
+          // wyrównanie notatek w otwartych ramkach listy zamówień (ta sama domena) – bez przeładowania
+          function applyNoteAlign(a) {
+            const css = `a[data-function_delegate="TextareaEdit"] { text-align: ${a}; }`;
+            document.querySelectorAll('iframe').forEach((f) => {
+              try {
+                const d = f.contentDocument;
+                if (!d || !/\/panel\/orders-list\.php/.test(d.location.pathname)) return;
+                let s = d.getElementById('tm-note-align');
+                if (!s) { s = d.createElement('style'); s.id = 'tm-note-align'; (d.head || d.documentElement).appendChild(s); }
+                s.textContent = css;
+              } catch (e) { /* inna domena – pomiń */ }
+            });
+          }
+
           // ---------- settings modal ----------
           async function openSettings() {
             const ov = document.createElement('div');
@@ -2431,6 +2456,14 @@ if (url.includes('megadron.pl/pl/products')) {
                 <input type="search" class="tm-search" name="tm-status-filter" autocomplete="off" data-lpignore="true" data-1p-ignore placeholder="Szukaj statusu">
                 <div class="tm-md-list">Ładowanie statusów…</div>
                 <div class="tm-md-f">
+                  <div class="tm-row">
+                    <span>Notatki na liście zamówień</span>
+                    <span class="tm-align" role="group" aria-label="Wyrównanie notatek">
+                      <button type="button" data-a="left" title="Do lewej"><span class="material-symbols-outlined notranslate">format_align_left</span></button>
+                      <button type="button" data-a="center" title="Do środka"><span class="material-symbols-outlined notranslate">format_align_center</span></button>
+                      <button type="button" data-a="right" title="Do prawej"><span class="material-symbols-outlined notranslate">format_align_right</span></button>
+                    </span>
+                  </div>
                   <div class="tm-row">
                     <button class="tm-btn tm-reload" type="button">Odśwież listę statusów</button>
                     <button class="tm-btn tm-primary tm-save" type="button" style="margin-left:auto">Zapisz</button>
@@ -2452,6 +2485,11 @@ if (url.includes('megadron.pl/pl/products')) {
             const search = ov.querySelector('.tm-search');
             let checked = new Set(selected);
             const draft = { ...names }; // własne nazwy – zapis dopiero po „Zapisz”
+            let alignDraft = load('noteAlign', 'left'); // wyrównanie notatek – zapis dopiero po „Zapisz”
+            const alignBtns = ov.querySelectorAll('.tm-align button');
+            const showAlign = () => alignBtns.forEach((b) => b.classList.toggle('on', b.dataset.a === alignDraft));
+            alignBtns.forEach((b) => b.addEventListener('click', () => { alignDraft = b.dataset.a; showAlign(); }));
+            showAlign();
 
             const fill = () => {
               listEl.innerHTML = '';
@@ -2542,6 +2580,8 @@ if (url.includes('megadron.pl/pl/products')) {
               save('selected', selected);
               names = { ...draft };
               save('names', names);
+              save('noteAlign', alignDraft);
+              applyNoteAlign(alignDraft);
               close();
               render();
               refreshCounts(selected); // tylko statusy, które nie zostały jeszcze pobrane w tym załadowaniu
