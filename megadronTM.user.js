@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.46
+// @version      1.2.47
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1158,63 +1158,6 @@
 
 
     // ════════════════════════════════════════════════════════════════════════
-    // PODGLĄD DŁUŻSZYCH NOTATEK
-    // ════════════════════════════════════════════════════════════════════════
-
-    if (url.includes('client6220.idosell.com')) {
-
-        let tooltipNote;
-        const MIN_LENGTH = 100;
-
-        function createTooltip() {
-            tooltipNote = document.createElement('div');
-            tooltipNote.style.position = 'fixed';
-            tooltipNote.style.zIndex = '99999';
-            tooltipNote.style.top = '50%';
-            tooltipNote.style.right = '20px';
-            tooltipNote.style.transform = 'translateY(-50%)';
-            tooltipNote.style.maxWidth = '420px';
-            tooltipNote.style.padding = '10px 12px';
-            tooltipNote.style.background = '#ffffff';
-            tooltipNote.style.border = '1px solid #ccc';
-            tooltipNote.style.borderRadius = '8px';
-            tooltipNote.style.boxShadow = '0 6px 18px rgba(0,0,0,.18)';
-            tooltipNote.style.fontSize = '13px';
-            tooltipNote.style.fontWeight = '700';
-            tooltipNote.style.lineHeight = '1.45';
-            tooltipNote.style.color = 'red';
-            tooltipNote.style.whiteSpace = 'pre-wrap';
-            tooltipNote.style.display = 'none';
-            document.body.appendChild(tooltipNote);
-        }
-
-        function showTooltipNote(text) {
-            if (!tooltipNote) createTooltip();
-            tooltipNote.textContent = text;
-            tooltipNote.style.display = 'block';
-        }
-
-        function hideTooltipNote() {
-            if (tooltipNote) tooltipNote.style.display = 'none';
-        }
-
-        function initTooltip() {
-            document.querySelectorAll('a[data-function_delegate="TextareaEdit"]').forEach(el => {
-                if (el.dataset.tmTooltipInit) return;
-                el.dataset.tmTooltipInit = '1';
-                const text = (el.getAttribute('title') || el.textContent || '').trim();
-                if (text.length <= MIN_LENGTH) return;
-                el.addEventListener('mouseenter', () => showTooltipNote(text));
-                el.addEventListener('mouseleave', hideTooltipNote);
-            });
-        }
-
-        initTooltip();
-        new MutationObserver(initTooltip).observe(document.documentElement, { childList: true, subtree: true });
-    }
-
-
-    // ════════════════════════════════════════════════════════════════════════
     // ALLEGRO OPISY KURIERÓW
     // ════════════════════════════════════════════════════════════════════════
 
@@ -1590,8 +1533,9 @@
     // ════════════════════════════════════════════════════════════════════════
 
     if (url.includes('/panel/orders-list.php')) {
-        // Tekst notatek ma znaki nowej linii, ale panel wyświetla go z white-space:normal (sklejone w jedną linię)
-        GM_addStyle('a[data-function_delegate="TextareaEdit"] { white-space: pre-wrap; overflow-wrap: anywhere; }');
+        // Tekst notatek ma znaki nowej linii, ale panel wyświetla go z white-space:normal (sklejone w jedną linię).
+        // display:block + text-align:left – tekst wyrównany do lewej zamiast do środka komórki
+        GM_addStyle('a[data-function_delegate="TextareaEdit"] { display: block; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; }');
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -1899,7 +1843,8 @@ if (url.includes('megadron.pl/pl/products')) {
     // STATUSY W PASKU BOCZNYM (sekcja „Statusy” z licznikami zamówień)
     // ════════════════════════════════════════════════════════════════════════
 
-    if (window.self === window.top && url.includes('/panel/') && !url.includes('/panel/app/client-deliveryaddress.php')) {
+    if (window.self === window.top && url.includes('/panel/') && !url.includes('/panel/app/client-deliveryaddress.php')
+        && !/^\/panel\/app\/rma\/?$/.test(location.pathname)) { // okienko zmiany adresu (reklamacje) – bez Statusów
         const tmStatusyStart = () => {
         (function () {
           'use strict';
