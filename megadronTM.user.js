@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.45
+// @version      1.2.46
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1583,6 +1583,15 @@
         } else {
             runApiOrders();
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // NOTATKI / UWAGI NA LIŚCIE ZAMÓWIEŃ – ENTERY JAK W EDYTORZE
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (url.includes('/panel/orders-list.php')) {
+        // Tekst notatek ma znaki nowej linii, ale panel wyświetla go z white-space:normal (sklejone w jedną linię)
+        GM_addStyle('a[data-function_delegate="TextareaEdit"] { white-space: pre-wrap; overflow-wrap: anywhere; }');
     }
 
     // ════════════════════════════════════════════════════════════════════════
