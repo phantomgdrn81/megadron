@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.48
+// @version      1.2.49
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1538,7 +1538,7 @@
         GM_addStyle('a[data-function_delegate="TextareaEdit"] { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }');
         let noteAlign = 'left';
         try { noteAlign = JSON.parse(GM_getValue(location.host + ':noteAlign') || '"left"'); } catch (e) { /* domyślnie */ }
-        if (!['left', 'center', 'right'].includes(noteAlign)) noteAlign = 'left';
+        if (!['left', 'center', 'right', 'justify'].includes(noteAlign)) noteAlign = 'left';
         const alignStyle = GM_addStyle(`a[data-function_delegate="TextareaEdit"] { text-align: ${noteAlign}; }`);
         if (alignStyle) alignStyle.id = 'tm-note-align'; // zębatka w głównym oknie podmienia ten styl po „Zapisz”
     }
@@ -2462,6 +2462,7 @@ if (url.includes('megadron.pl/pl/products')) {
                       <button type="button" data-a="left" title="Do lewej"><span class="material-symbols-outlined notranslate">format_align_left</span></button>
                       <button type="button" data-a="center" title="Do środka"><span class="material-symbols-outlined notranslate">format_align_center</span></button>
                       <button type="button" data-a="right" title="Do prawej"><span class="material-symbols-outlined notranslate">format_align_right</span></button>
+                      <button type="button" data-a="justify" title="Wyjustuj"><span class="material-symbols-outlined notranslate">format_align_justify</span></button>
                     </span>
                   </div>
                   <div class="tm-row">
