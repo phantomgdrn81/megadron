@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.3.1
+// @version      1.3.2
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -61,6 +61,7 @@
     // np. 'Allegro One Box' łapie też „(DPD)”, „(One Kurier)” i „, ORLEN Paczka”.
     var GB_COURIER_TITLES = [
         'Allegro Automat DPD Pickup',
+        'Allegro Odbiór w Punkcie DPD',
         'Allegro Odbiór w Punkcie Orlen Paczka',
         'Allegro Automat Orlen Paczka',
         'Allegro Automat DHL BOX 24/7',
