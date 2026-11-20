@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.2.49
+// @version      1.3.1
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -45,80 +45,29 @@
         }
     }
 
-    // ════════════════════════════════════════════════════════════════════════
-    // GUZICZKI GABARYTÓW INPOST //notmine
-    // ════════════════════════════════════════════════════════════════════════
+    // (Gabaryty InPost i Allegro oraz kartony są teraz w jednym dziale „PAKOWANIE” niżej)
 
-    if (url.includes('/panel/order-verification.php')) {
-
-        window.addEventListener("load", () => {
-            addButtonsGabaryt();
-        });
-
-        function addButtonsGabaryt() {
-            var scriptDelivery = document.getElementById("deliverer-number-count_" + IAI._orderNumber);
-            scriptDelivery = scriptDelivery.getAttribute("onclick");
-            scriptDelivery = scriptDelivery.replace('show_packages_edit_toplayer(event,', '');
-            scriptDelivery = scriptDelivery.replace(/\)\s*$/, '');
-            var jsonObject = JSON.parse(scriptDelivery);
-            var packageId = jsonObject.delivery_packages.packs[0].id;
-
-            if (!jsonObject.delivery_packages.packs[0].package_number) {
-                // 5. kolumna wiersza; gdy jej nie ma (np. miniKurier24) – komórka kuriera
-                var mydiv = document.querySelector("#tr_0 > td:nth-child(5)") ||
-                    document.getElementById("deliverer-number-count_" + IAI._orderNumber).closest('td');
-                if (document.querySelector('[title="Paczkomaty InPost Smile"]')) {
-                    gabarytKafelki(mydiv, function (letter) {
-                        IAI.ajax.post('/panel/ajax/orderd.php', '', 'action=assignBoxToPackage&packageId=' + packageId + '&boxType=' + letter);
-                        IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'courierId=' + jsonObject.deliverer_id + '&action=generate&orders[]=' + jsonObject.order_id);
-                    });
-                } else if (document.querySelector('[title="Allegro miniKurier24 InPost"]')) {
-                    // miniKurier24: samo zapytanie nie przypisuje gabarytu – robimy to przez okienko panelu
-                    // „Generowanie przesyłek i wydruków”: ustawiamy gabaryt (letter_a/b/c) i klikamy „Generuj”
-                    gabarytKafelki(mydiv, function (letter) {
-                        generujPrzezOkienko('letter_' + letter.toLowerCase());
-                    });
-                } else if (document.querySelector('[title="Allegro Paczkomaty 24/7 InPost - wszystkie rozmiary"]') || document.querySelector('[title="InPost Paczkomaty 24/7 - wszystkie rozmiary"]')) {
-                    var gauge = { A: 'small', B: 'medium', C: 'large' };
-                    gabarytKafelki(mydiv, function (letter) {
-                        IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'defaultParcelGauge=' + gauge[letter] + '&courierId=' + jsonObject.deliverer_id + '&action=generate&orders[]=' + jsonObject.order_id);
-                    });
-                } else if (!/^Allegro\b/i.test(jsonObject.deliverer_name || '')) {
-                    IAI.ajax.post('/panel/ajax/packages-gateway.php', '', 'courierId=' + jsonObject.deliverer_id + '&action=generate&orders[]=' + jsonObject.order_id);
-                }
-            }
-            var badDivs = $("#msg_line_msg");
-            badDivs.remove();
-        }
-
-        // Otwiera okienko „Generowanie przesyłek i wydruków dla kuriera”, wybiera gabaryt i zatwierdza
-        function generujPrzezOkienko(gaugeValue) {
-            var link = document.querySelector('.generateNumber22') ||
-                [...document.querySelectorAll('a')].find(function (a) { return /Generowanie przesyłek i wydruków/.test(a.textContent); });
-            if (!link) return;
-            link.click();
-            var start = Date.now();
-            (function czekaj() {
-                var sel = document.getElementById('fg_defaultParcelGauge');
-                if (sel && sel.offsetParent && [...sel.options].some(function (o) { return o.value === gaugeValue; })) {
-                    sel.value = gaugeValue;
-                    sel.dispatchEvent(new Event('change', { bubbles: true }));
-                    var form = sel.closest('form');
-                    var submit = form && [...form.elements].find(function (e) { return e.type === 'submit'; });
-                    if (submit) submit.click();
-                    return;
-                }
-                if (Date.now() - start < 10000) setTimeout(czekaj, 200);
-            })();
-        }
-    }
-
-    // Kafelki A/B/C (z wymiarami) – wspólne dla InPost i kurierów Allegro (dział niżej).
+    // Kafelki A/B/C (z wymiarami) – wspólne dla InPost i kurierów Allegro (dział PAKOWANIE).
     // Poza blokiem if, bo w trybie strict funkcja z bloku nie byłaby widoczna w innym dziale.
     var GB_KAFELKI = [
         { letter: 'A', dims: '8×38×64 cm', cls: 'btn btn-sm btn-success formbutton' },
         { letter: 'B', dims: '19×38×64 cm', cls: 'btn btn-sm btn-warning formbutton' },
         { letter: 'C', dims: '41×38×64 cm', cls: 'btn btn-sm btn-danger formbutton' },
+    ];
+
+    // Kurierzy Allegro, którzy zamiast wymiarów biorą gabaryt (S/M/L albo A/B/C) – bez kartonów.
+    // Kurierzy InPost (Smile, miniKurier24, Paczkomaty 24/7) są osobno w packagingType().
+    // Nazwy bez kraju; porównanie po początku nazwy (normCourier w dziale PAKOWANIE),
+    // np. 'Allegro One Box' łapie też „(DPD)”, „(One Kurier)” i „, ORLEN Paczka”.
+    var GB_COURIER_TITLES = [
+        'Allegro Automat DPD Pickup',
+        'Allegro Odbiór w Punkcie Orlen Paczka',
+        'Allegro Automat Orlen Paczka',
+        'Allegro Automat DHL BOX 24/7',
+        'Allegro Odbiór w Punkcie DHL',
+        'Allegro One Box',
+        'Allegro One Kurier',
+        'Allegro kurier DPD',
     ];
 
     function gabarytKafelki(mydiv, onPick) {
@@ -353,76 +302,10 @@
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // GUZICZKI GABARYTÓW ALLEGRO
-    // ════════════════════════════════════════════════════════════════════════
-
-    if (url.includes('/panel/order-verification.php')) {
-
-        window.addEventListener("load", () => {
-            [0, 300, 700, 1200, 2000, 3000].forEach(d => setTimeout(addButtonsGabarytAllegro, d));
-        });
-
-        function addButtonsGabarytAllegro() {
-            if (document.getElementById('wyborGabarytu')) return;
-
-            var GB_COURIER_TITLES = [
-                'Allegro Automat DPD Pickup',
-                'Allegro Odbiór w Punkcie Orlen Paczka',
-                'Allegro Automat Orlen Paczka',
-                'Allegro Automat DHL BOX 24/7 (AD)',
-                'Allegro Odbiór w Punkcie DHL (AD)',
-                'Allegro One Box (One Kurier)',
-                'Allegro One Box (DPD)',
-                'Allegro One Kurier - dostawa na jutro',
-                'Allegro kurier DPD (Polska)',
-            ];
-
-            var matchedTitle = GB_COURIER_TITLES.find(function (title) {
-                return !!document.querySelector('[title="' + title + '"]');
-            });
-            if (!matchedTitle) return;
-
-            var deliveryEl = document.getElementById("deliverer-number-count_" + IAI._orderNumber);
-            if (!deliveryEl) return;
-
-            var scriptDelivery = deliveryEl.getAttribute("onclick");
-            scriptDelivery = scriptDelivery.replace('show_packages_edit_toplayer(event,', '');
-            scriptDelivery = scriptDelivery.replace(/\)\s*$/, '');
-            var jsonObject = JSON.parse(scriptDelivery);
-
-            if (jsonObject.delivery_packages.packs[0].package_number) return;
-
-            var mydiv = deliveryEl.closest('td');
-            if (!mydiv) return;
-
-            // Wartości gabarytów z selecta panelu (pierwsze trzy = A/B/C), inaczej S/M/L
-            var gaugeSelect = document.querySelector('select#fg_defaultParcelGauge');
-            var values = gaugeSelect ? [...gaugeSelect.options].map(o => o.value).filter(Boolean) : [];
-            if (values.length < 3) values = ['S', 'M', 'L'];
-            var gauge = { A: values[0], B: values[1], C: values[2] };
-
-            // Te same kafelki co przy InPost (wspólna funkcja gabarytKafelki)
-            gabarytKafelki(mydiv, function (letter) {
-                IAI.ajax.post(
-                    '/panel/ajax/packages-gateway.php', '',
-                    'defaultParcelGauge=' + gauge[letter] +
-                    '&courierId=' + jsonObject.deliverer_id +
-                    '&action=generate&orders[]=' + jsonObject.order_id
-                );
-                setTimeout(function () {
-                    var link = document.querySelector('.generateNumber22');
-                    if (link) link.click();
-                }, 1200);
-            });
-
-            var badDivs = $("#msg_line_msg");
-            badDivs.remove();
-        }
-    }
-
-
-    // ════════════════════════════════════════════════════════════════════════
-    // KARTONY – ALLEGRO (wpisywane wymiary)
+    // PAKOWANIE – GABARYTY (InPost, Allegro) / KARTONY
+    // Jedna decyzja (packagingType) i jedno wyświetlenie (renderPackaging).
+    // Wysyłanie dla każdego kuriera skopiowane 1:1 z dawnych działów
+    // „GUZICZKI GABARYTÓW INPOST //notmine” i „GUZICZKI GABARYTÓW ALLEGRO”.
     // ════════════════════════════════════════════════════════════════════════
 
     if (url.includes('/panel/order-verification.php')) {
@@ -444,9 +327,120 @@
             return tr ? tr.cells[1].textContent.replace(/\s+/g, ' ').trim() : '';
         }
 
-        // Każde zamówienie z kurierem Allegro – polskie i zagraniczne
         function isAllegro() {
             return /^Allegro/i.test(rowText('Kurier'));
+        }
+
+        // Zamówienie zagraniczne: domena allegro.xx, flaga inna niż PL albo kraj inny niż Polska
+        function isForeignOrder(el) {
+            if (/allegro\.(?!pl\b)[a-z]{2}\b/i.test(rowText('Źródło zamówienia'))) return true;
+            const table = el && el.closest('table');
+            if (!table) return false;
+            const flags = [...table.querySelectorAll('img')]
+                .map(i => (i.getAttribute('src') || '').match(/(?:^|\/)([a-z]{2})\.png$/i))
+                .filter(Boolean).map(m => m[1].toLowerCase());
+            if (flags.some(cc => cc !== 'pl')) return true;
+            const countries = (table.rows[2]?.cells[1]?.textContent || '').match(/\(([^()]+)\)/g) || [];
+            return countries.some(c => !/Polska/i.test(c));
+        }
+
+        // --- Dane paczki (JSON z onclick przy numerze przesyłki) ---
+        function pakData() {
+            try {
+                const el = document.getElementById('deliverer-number-count_' + IAI._orderNumber);
+                if (!el) return null;
+                const json = JSON.parse(el.getAttribute('onclick')
+                    .replace('show_packages_edit_toplayer(event,', '').replace(/\)\s*$/, ''));
+                const pack = json.delivery_packages.packs[0];
+                const cell = el.closest('td');
+                return pack && cell ? { el, json, pack, cell } : null;
+            } catch (e) { return null; }
+        }
+
+        // "Allegro kurier DPD (Polska) [zmień]" -> "allegro kurier dpd"
+        // (IdoSell w title podaje nazwę bez kraju, a w wierszu „Kurier” z krajem)
+        const normCourier = s => (s || '').replace(/\[zmień\]/i, '').replace(/\s*\([^()]*\)\s*$/, '')
+            .replace(/\s+/g, ' ').trim().toLowerCase();
+
+        // Kurier na stronie: wiersz „Kurier” albo atrybut title zaczyna się od podanej nazwy
+        function courierIs(title) {
+            const want = normCourier(title);
+            if (normCourier(rowText('Kurier')).startsWith(want)) return true;
+            return [...document.querySelectorAll('[title]')]
+                .some(e => normCourier(e.getAttribute('title')).startsWith(want));
+        }
+        const courierIn = titles => titles.some(courierIs);
+
+        // --- Jedna decyzja: co pokazać przy tym zamówieniu ---
+        // null = nic; undefined = jeszcze za wcześnie (strona się nie doładowała)
+        function packagingType(data) {
+            if (!data || !rowText('Kurier')) return undefined;
+            if (data.pack.package_number) return null;
+            const link = kq('a.generateNumber22');
+            const allegro = isAllegro();
+            if (allegro && isForeignOrder(link || data.el)) return 'box';
+            if (courierIs('Paczkomaty InPost Smile')) return 'inpost-smile';
+            if (courierIs('Allegro miniKurier24 InPost')) return 'inpost-mini';
+            if (courierIn(['Allegro Paczkomaty 24/7 InPost - wszystkie rozmiary', 'InPost Paczkomaty 24/7 - wszystkie rozmiary'])) return 'inpost-247';
+            if (courierIn(GB_COURIER_TITLES)) return 'allegro-gauge';
+            if (allegro) return 'box';
+            if (!/^Allegro\b/i.test(data.json.deliverer_name || '')) return 'auto-generate';
+            return null;
+        }
+
+        // --- Wysyłanie gabarytów: skopiowane 1:1 z dawnych działów ---
+        const postGateway = body => IAI.ajax.post('/panel/ajax/packages-gateway.php', '', body);
+
+        function gaugeHandler(type, data) {
+            const json = data.json;
+            if (type === 'inpost-smile') {
+                const packageId = data.pack.id;
+                return letter => {
+                    IAI.ajax.post('/panel/ajax/orderd.php', '', 'action=assignBoxToPackage&packageId=' + packageId + '&boxType=' + letter);
+                    postGateway('courierId=' + json.deliverer_id + '&action=generate&orders[]=' + json.order_id);
+                };
+            }
+            if (type === 'inpost-mini') {
+                // miniKurier24: samo zapytanie nie przypisuje gabarytu – robimy to przez okienko panelu
+                return letter => generujPrzezOkienko('letter_' + letter.toLowerCase());
+            }
+            if (type === 'inpost-247') {
+                const gauge = { A: 'small', B: 'medium', C: 'large' };
+                return letter => postGateway('defaultParcelGauge=' + gauge[letter] + '&courierId=' + json.deliverer_id + '&action=generate&orders[]=' + json.order_id);
+            }
+            // allegro-gauge: wartości z selecta panelu (pierwsze trzy = A/B/C), inaczej S/M/L
+            const gaugeSelect = document.querySelector('select#fg_defaultParcelGauge');
+            let values = gaugeSelect ? [...gaugeSelect.options].map(o => o.value).filter(Boolean) : [];
+            if (values.length < 3) values = ['S', 'M', 'L'];
+            const gauge = { A: values[0], B: values[1], C: values[2] };
+            return letter => {
+                postGateway('defaultParcelGauge=' + gauge[letter] + '&courierId=' + json.deliverer_id + '&action=generate&orders[]=' + json.order_id);
+                setTimeout(function () {
+                    const link = document.querySelector('.generateNumber22');
+                    if (link) link.click();
+                }, 1200);
+            };
+        }
+
+        // Otwiera okienko „Generowanie przesyłek i wydruków dla kuriera”, wybiera gabaryt i zatwierdza
+        function generujPrzezOkienko(gaugeValue) {
+            var link = document.querySelector('.generateNumber22') ||
+                [...document.querySelectorAll('a')].find(function (a) { return /Generowanie przesyłek i wydruków/.test(a.textContent); });
+            if (!link) return;
+            link.click();
+            var start = Date.now();
+            (function czekaj() {
+                var sel = document.getElementById('fg_defaultParcelGauge');
+                if (sel && sel.offsetParent && [...sel.options].some(function (o) { return o.value === gaugeValue; })) {
+                    sel.value = gaugeValue;
+                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                    var form = sel.closest('form');
+                    var submit = form && [...form.elements].find(function (e) { return e.type === 'submit'; });
+                    if (submit) submit.click();
+                    return;
+                }
+                if (Date.now() - start < 10000) setTimeout(czekaj, 200);
+            })();
         }
 
         function waitFor(fn, timeout = 10000) {
@@ -609,7 +603,19 @@
 
                 setStatus('busy', `Generuję: ${box.name}…`);
                 link.click();
-                const h = await waitFor(() => { const e = kq('#fg_Height'); return visible(e) && e; });
+                // Formularz kuriera: wymiary (fg_Height) albo gabaryt (fg_defaultParcelGauge)
+                const found = await waitFor(() => {
+                    const e = kq('#fg_Height');
+                    if (visible(e)) return e;
+                    const g = kq('#fg_defaultParcelGauge');
+                    return visible(g) ? 'gauge' : null;
+                });
+                if (found === 'gauge') {
+                    kq('#windowTopLayer_c a.container-close')?.click();
+                    kq('.krb-card')?.remove();
+                    throw new Error('Ten kurier używa gabarytów (S/M/L / A/B/C), nie wymiarów');
+                }
+                const h = found;
                 const panel = h.closest('#windowTopLayer_c') || h.closest('form') || document;
                 setVal(h, box.h);
                 setVal(kq('#fg_Width', panel), box.w);
@@ -862,11 +868,13 @@
             document.addEventListener('keydown', onEsc);
         }
 
-        function init() {
+        // Karta kartonu w komórce numeru przesyłki; true = jest na stronie
+        function mountBoxCard() {
             const link = kq('a.generateNumber22');
-            if (!link || kq('.krb-card')) return;
+            if (!link) return false;
+            if (kq('.krb-card')) return true;
             const td = link.closest('td');
-            if (!td || !/Nie wygenerowano numeru/i.test(td.textContent) || !isAllegro()) return;
+            if (!td || !/Nie wygenerowano numeru/i.test(td.textContent)) return false;
 
             injectStyles();
             const card = document.createElement('div');
@@ -896,6 +904,32 @@
             };
             gear.onclick = toggleGear;
             showSelected();
+            return true;
+        }
+
+        // --- Jedno wyświetlenie: gabaryty ALBO karton ALBO automatyczne generowanie ---
+        let pakDone = false;
+        function renderPackaging() {
+            if (pakDone) return;
+            const data = pakData();
+            const type = packagingType(data);
+            if (type === undefined) return; // strona jeszcze się ładuje – kolejna próba
+            try {
+                if (type === 'box') {
+                    if (!mountBoxCard()) return; // link generowania jeszcze nie gotowy
+                } else if (type === 'auto-generate') {
+                    postGateway('courierId=' + data.json.deliverer_id + '&action=generate&orders[]=' + data.json.order_id);
+                } else if (type) {
+                    // InPost: 5. kolumna wiersza; gdy jej nie ma (np. miniKurier24) – komórka kuriera
+                    const cell = type.startsWith('inpost') ? (document.querySelector('#tr_0 > td:nth-child(5)') || data.cell) : data.cell;
+                    gabarytKafelki(cell, gaugeHandler(type, data));
+                }
+                if (type && type !== 'box') $('#msg_line_msg').remove();
+                log('pakowanie:', type || 'nic');
+            } catch (e) {
+                console.error('[Pakowanie]', e);
+            }
+            pakDone = true;
         }
 
         window.addEventListener("load", () => {
@@ -904,7 +938,7 @@
                 injectStyles();
                 finishLabel(pendingBox);
             } else {
-                [0, 500, 1500].forEach(d => setTimeout(init, d));
+                [0, 300, 700, 1200, 2000, 3000].forEach(d => setTimeout(renderPackaging, d));
             }
         });
     }
