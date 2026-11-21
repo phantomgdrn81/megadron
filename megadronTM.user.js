@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.3.3
+// @version      1.3.4
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1861,12 +1861,17 @@
             .tm-md-list label{display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer}
             .tm-md-list .tm-grp{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:#888;padding:10px 0 2px}
             .tm-md-list .tm-grp:first-child{padding-top:2px}
-            .tm-md-list label.tm-sub{padding-left:22px;color:#555}
-            .tm-md-list label code{margin-left:auto;font-size:11px;color:#999}
+            .tm-md-list label.tm-top{font-weight:600;border-top:1px solid #eee;padding-top:6px;margin-top:2px}
+            .tm-md-list .tm-grp + label.tm-top{border-top:0;margin-top:0}
+            .tm-md-list label.tm-sub{margin-left:8px;padding-left:14px;border-left:1px solid #dcdce2;color:#555}
+            .tm-md-list label input[type=checkbox]{margin:0 0 0 8px;flex:none}
+            .tm-md-list label.tm-off{opacity:.5}
+            .tm-md-list label.tm-off > span:not(.tm-ico):not(.tm-ren){text-decoration:line-through}
+            .tm-md-list label code{font-size:11px;color:#999}
             .tm-md-list.tm-hide-codes label code{display:none}
             .tm-md-list .tm-ico{font-size:18px;flex:none}
             .tm-md-list .tm-alias{color:#888}
-            .tm-md-list .tm-ren{font-size:16px;opacity:0;cursor:pointer;color:#666;padding:0 2px}
+            .tm-md-list .tm-ren{font-size:16px;opacity:0;cursor:pointer;color:#666;padding:0 2px;margin-right:auto;font-weight:400}
             .tm-md-list label:hover .tm-ren{opacity:.6}
             .tm-md-list .tm-ren:hover{opacity:1 !important}
             .tm-md-list .tm-alias-in{font:inherit;font-size:12px;padding:1px 4px;border:1px solid #bbb;border-radius:3px;width:150px}
@@ -2343,12 +2348,15 @@
                 const name = CUSTOM[s.code] ? CUSTOM[s.code].name : s.name;
                 const l = document.createElement('label');
                 if (s.sub) l.className = 'tm-sub';
+                else if (!extraOf(s.code)) l.className = 'tm-top';
                 const setQ = () => { l.dataset.q = (name + ' ' + (draft[s.code] || '') + ' ' + s.parent + ' ' + s.code).toLowerCase(); };
                 setQ();
                 const cb = document.createElement('input');
                 cb.type = 'checkbox';
                 cb.checked = checked.has(s.code);
-                cb.addEventListener('change', () => { cb.checked ? checked.add(s.code) : checked.delete(s.code); });
+                const mark = () => l.classList.toggle('tm-off', !cb.checked);
+                mark();
+                cb.addEventListener('change', () => { cb.checked ? checked.add(s.code) : checked.delete(s.code); mark(); });
                 const ico = document.createElement('span');
                 ico.className = 'material-symbols-outlined notranslate tm-ico';
                 paintIcon(ico, s.code);
@@ -2391,7 +2399,7 @@
                 });
                 const c = document.createElement('code');
                 c.textContent = extraOf(s.code) ? '' : s.code;
-                l.append(cb, ico, t, al, ren, c);
+                l.append(ico, t, al, ren, c, cb); // checkbox na końcu
                 listEl.appendChild(l);
               });
               applyFilter();
