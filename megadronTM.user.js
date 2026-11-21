@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.3.2
+// @version      1.3.3
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -19,13 +19,12 @@
 // @downloadURL  https://raw.githubusercontent.com/phantomgdrn81/megadron/refs/heads/main/megadronTM.user.js
 // ==/UserScript==
 
-/* global $, IAI */ //clearing the triggers
+/* global $, IAI */
 
 (function () {
     'use strict';
 
     const url = window.location.href;
-
 
     // ════════════════════════════════════════════════════════════════════════
     // PRZEKIEROWANIE /panel/ -> /panel/app/
@@ -45,66 +44,86 @@
         }
     }
 
-    // (Gabaryty InPost i Allegro oraz kartony są teraz w jednym dziale „PAKOWANIE” niżej)
+    // ════════════════════════════════════════════════════════════════════════
+    // WSPÓLNE
+    // ════════════════════════════════════════════════════════════════════════
 
-    // Kafelki A/B/C (z wymiarami) – wspólne dla InPost i kurierów Allegro (dział PAKOWANIE).
-    // Poza blokiem if, bo w trybie strict funkcja z bloku nie byłaby widoczna w innym dziale.
-    var GB_KAFELKI = [
-        { letter: 'A', dims: '8×38×64 cm', cls: 'btn btn-sm btn-success formbutton' },
-        { letter: 'B', dims: '19×38×64 cm', cls: 'btn btn-sm btn-warning formbutton' },
-        { letter: 'C', dims: '41×38×64 cm', cls: 'btn btn-sm btn-danger formbutton' },
-    ];
+    // Dane paczki z JSON-a w onclick przy numerze przesyłki (strona zamówienia)
+    function orderPackage() {
+        try {
+            const el = document.getElementById('deliverer-number-count_' + IAI._orderNumber);
+            if (!el) return null;
+            const json = JSON.parse(el.getAttribute('onclick')
+                .replace('show_packages_edit_toplayer(event,', '').replace(/\)\s*$/, ''));
+            const pack = json.delivery_packages.packs[0];
+            const cell = el.closest('td');
+            return pack && cell ? { el, json, pack, cell } : null;
+        } catch (e) { return null; }
+    }
 
-    // Kurierzy Allegro, którzy zamiast wymiarów biorą gabaryt (S/M/L albo A/B/C) – bez kartonów.
-    // Kurierzy InPost (Smile, miniKurier24, Paczkomaty 24/7) są osobno w packagingType().
-    // Nazwy bez kraju; porównanie po początku nazwy (normCourier w dziale PAKOWANIE),
-    // np. 'Allegro One Box' łapie też „(DPD)”, „(One Kurier)” i „, ORLEN Paczka”.
-    var GB_COURIER_TITLES = [
-        'Allegro Automat DPD Pickup',
-        'Allegro Odbiór w Punkcie DPD',
-        'Allegro Odbiór w Punkcie Orlen Paczka',
-        'Allegro Automat Orlen Paczka',
-        'Allegro Automat DHL BOX 24/7',
-        'Allegro Odbiór w Punkcie DHL',
-        'Allegro One Box',
-        'Allegro One Kurier',
-        'Allegro kurier DPD',
-    ];
+    // Wiersz jedzie za kursorem, pozostałe robią miejsce. Ruch < 5 px = zwykły klik.
+    // o: { lift, settle, sorting, box, scale, onStart, onEnd, onRelease, onDrop(to) }
+    function dragSort(e, items, i, o) {
+        const el = items[i];
+        const rects = items.map(x => x.getBoundingClientRect());
+        const gap = Math.max(0, rects[1].top - rects[0].bottom);
+        const h = rects[i].height + gap;
+        const mids = rects.map(r => r.top + r.height / 2);
+        const minDy = rects[0].top - rects[i].top;
+        const maxDy = rects[rects.length - 1].bottom - rects[i].bottom;
+        const offset = n => n > i ? rects[n].bottom - rects[i].bottom : rects[n].top - rects[i].top;
+        const y0 = e.clientY;
+        let dragging = false, to = i;
 
-    function gabarytKafelki(mydiv, onPick) {
-        if (!mydiv || document.getElementById('wyborGabarytu')) return;
-        if (!document.getElementById('gbStyle')) {
-            var st = document.createElement('style');
-            st.id = 'gbStyle';
-            st.textContent =
-                '#wyborGabarytu{margin-top:8px;text-align:center}' +
-                '#wyborGabarytu > b{font-size:15px}' +
-                '#wyborGabarytu .gb-row{display:flex;gap:4px}' +
-                '#wyborGabarytu .gb-btn{flex:1 1 0;min-width:0;height:58px;font-size:16px;border-radius:3px;line-height:1.15;padding:4px 6px}' +
-                '#wyborGabarytu .gb-btn small{display:block;font-size:12px;opacity:.85;white-space:nowrap}';
-            document.head.appendChild(st);
-        }
-
-        var wrap = document.createElement('div');
-        wrap.id = 'wyborGabarytu';
-        wrap.innerHTML = '<div class="gb-row"></div>';
-        var row = wrap.querySelector('.gb-row');
-
-        GB_KAFELKI.forEach(function (g) {
-            var btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = g.cls + ' gb-btn';
-            btn.innerHTML = 'Gabaryt ' + g.letter + '<small>' + g.dims + '</small>';
-            btn.addEventListener('click', function () {
-                onPick(g.letter);
-                wrap.innerHTML = '<br/><b>Przypisano gabaryt ' + g.letter + '!</b>';
-                var fgCode = document.querySelector('#fg_code');
-                if (fgCode) fgCode.focus();
-            });
-            row.appendChild(btn);
+        const place = n => items.forEach((x, j) => {
+            if (j === i) return;
+            const sh = (i < n && j > i && j <= n) ? -h : (n < i && j >= n && j < i) ? h : 0;
+            x.style.transform = sh ? `translateY(${sh}px)` : '';
         });
-
-        mydiv.appendChild(wrap);
+        const finish = () => {
+            window.removeEventListener('pointermove', onMove, true);
+            window.removeEventListener('pointerup', onUp, true);
+            window.removeEventListener('pointercancel', cancel, true);
+            window.removeEventListener('keydown', onKey, true);
+            o.box.classList.remove(o.sorting);
+            if (o.onEnd) o.onEnd();
+        };
+        const cancel = () => {
+            finish();
+            el.classList.remove(o.lift);
+            items.forEach(x => { x.style.transform = ''; });
+        };
+        const onKey = ev => { if (ev.key === 'Escape' && dragging) { ev.stopPropagation(); cancel(); } };
+        const onMove = ev => {
+            const dy = ev.clientY - y0;
+            if (!dragging) {
+                if (Math.abs(dy) < 5) return;
+                dragging = true;
+                if (o.onStart) o.onStart();
+                el.classList.add(o.lift);
+                o.box.classList.add(o.sorting);
+                window.addEventListener('keydown', onKey, true);
+            }
+            const d = Math.max(minDy, Math.min(maxDy, dy));
+            el.style.transform = `translateY(${d}px)` + (o.scale || '');
+            const c = mids[i] + d;
+            let n = 0;
+            mids.forEach((m, j) => { if (Math.abs(m - c) < Math.abs(mids[n] - c)) n = j; });
+            if (n !== to) { to = n; place(to); }
+        };
+        const onUp = ev => {
+            if (!dragging && Math.abs(ev.clientY - y0) >= 5) onMove(ev); // szybki ruch
+            finish();
+            if (!dragging) return;
+            if (o.onRelease) o.onRelease();
+            el.classList.remove(o.lift);
+            el.classList.add(o.settle);
+            el.style.transform = `translateY(${offset(to)}px)`;
+            setTimeout(() => o.onDrop(to), 160);
+        };
+        window.addEventListener('pointermove', onMove, true);
+        window.addEventListener('pointerup', onUp, true);
+        window.addEventListener('pointercancel', cancel, true);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -117,23 +136,12 @@
             [0, 300, 800, 1500, 3000].forEach(d => setTimeout(addWagaGear, d));
         });
 
-        // Dane paczki z tego samego JSON-a co guziki gabarytów
-        function wagaPackage() {
-            var el = document.getElementById("deliverer-number-count_" + IAI._orderNumber);
-            if (!el) return null;
-            try {
-                var json = JSON.parse(el.getAttribute("onclick").replace('show_packages_edit_toplayer(event,', '').replace(/\)\s*$/, ''));
-                return json.delivery_packages.packs[0];
-            } catch (e) { return null; }
-        }
-
         // Własny pasek z ikoną w komórce kuriera – niezależny od guzików gabarytów
         function addWagaGear() {
             if (document.getElementById('tmWagaBar')) return;
-            var pack = wagaPackage();
-            if (!pack) return;
-            var cell = document.getElementById("deliverer-number-count_" + IAI._orderNumber).closest('td');
-            if (!cell) return;
+            var data = orderPackage();
+            if (!data) return;
+            var pack = data.pack, cell = data.cell;
 
             if (!document.getElementById('wgStyle')) {
                 var st = document.createElement('style');
@@ -305,13 +313,10 @@
     // ════════════════════════════════════════════════════════════════════════
     // PAKOWANIE – GABARYTY (InPost, Allegro) / KARTONY
     // Jedna decyzja (packagingType) i jedno wyświetlenie (renderPackaging).
-    // Wysyłanie dla każdego kuriera skopiowane 1:1 z dawnych działów
-    // „GUZICZKI GABARYTÓW INPOST //notmine” i „GUZICZKI GABARYTÓW ALLEGRO”.
     // ════════════════════════════════════════════════════════════════════════
 
     if (url.includes('/panel/order-verification.php')) {
 
-        const DRY_RUN = false;
         const STORE_KEY = 'kartony';
         const SELECTED_KEY = 'kartonWybrany';
         const NAME_MAX = 10;
@@ -321,6 +326,63 @@
 
         const loadBoxes = () => { try { return GM_getValue(STORE_KEY, []) || []; } catch (e) { return []; } };
         const saveBoxes = boxes => GM_setValue(STORE_KEY, boxes);
+
+        // Kafelki A/B/C – wspólne dla InPost i kurierów Allegro
+        const GB_KAFELKI = [
+            { letter: 'A', dims: '8×38×64 cm', cls: 'btn btn-sm btn-success formbutton' },
+            { letter: 'B', dims: '19×38×64 cm', cls: 'btn btn-sm btn-warning formbutton' },
+            { letter: 'C', dims: '41×38×64 cm', cls: 'btn btn-sm btn-danger formbutton' },
+        ];
+
+        // Kurierzy Allegro z gabarytem zamiast wymiarów. Porównanie po początku nazwy
+        // (np. 'Allegro One Box' łapie też „(DPD)”). InPost osobno w packagingType().
+        const GB_COURIER_TITLES = [
+            'Allegro Automat DPD Pickup',
+            'Allegro Odbiór w Punkcie DPD',
+            'Allegro Odbiór w Punkcie Orlen Paczka',
+            'Allegro Automat Orlen Paczka',
+            'Allegro Automat DHL BOX 24/7',
+            'Allegro Odbiór w Punkcie DHL',
+            'Allegro One Box',
+            'Allegro One Kurier',
+            'Allegro kurier DPD',
+        ];
+
+        function gabarytKafelki(mydiv, onPick) {
+            if (!mydiv || document.getElementById('wyborGabarytu')) return;
+            if (!document.getElementById('gbStyle')) {
+                var st = document.createElement('style');
+                st.id = 'gbStyle';
+                st.textContent =
+                    '#wyborGabarytu{margin-top:8px;text-align:center}' +
+                    '#wyborGabarytu > b{font-size:15px}' +
+                    '#wyborGabarytu .gb-row{display:flex;gap:4px}' +
+                    '#wyborGabarytu .gb-btn{flex:1 1 0;min-width:0;height:58px;font-size:16px;border-radius:3px;line-height:1.15;padding:4px 6px}' +
+                    '#wyborGabarytu .gb-btn small{display:block;font-size:12px;opacity:.85;white-space:nowrap}';
+                document.head.appendChild(st);
+            }
+
+            var wrap = document.createElement('div');
+            wrap.id = 'wyborGabarytu';
+            wrap.innerHTML = '<div class="gb-row"></div>';
+            var row = wrap.querySelector('.gb-row');
+
+            GB_KAFELKI.forEach(function (g) {
+                var btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = g.cls + ' gb-btn';
+                btn.innerHTML = 'Gabaryt ' + g.letter + '<small>' + g.dims + '</small>';
+                btn.addEventListener('click', function () {
+                    onPick(g.letter);
+                    wrap.innerHTML = '<br/><b>Przypisano gabaryt ' + g.letter + '!</b>';
+                    var fgCode = document.querySelector('#fg_code');
+                    if (fgCode) fgCode.focus();
+                });
+                row.appendChild(btn);
+            });
+
+            mydiv.appendChild(wrap);
+        }
 
         function rowText(label) {
             const tr = [...document.querySelectorAll('tr')]
@@ -343,19 +405,6 @@
             if (flags.some(cc => cc !== 'pl')) return true;
             const countries = (table.rows[2]?.cells[1]?.textContent || '').match(/\(([^()]+)\)/g) || [];
             return countries.some(c => !/Polska/i.test(c));
-        }
-
-        // --- Dane paczki (JSON z onclick przy numerze przesyłki) ---
-        function pakData() {
-            try {
-                const el = document.getElementById('deliverer-number-count_' + IAI._orderNumber);
-                if (!el) return null;
-                const json = JSON.parse(el.getAttribute('onclick')
-                    .replace('show_packages_edit_toplayer(event,', '').replace(/\)\s*$/, ''));
-                const pack = json.delivery_packages.packs[0];
-                const cell = el.closest('td');
-                return pack && cell ? { el, json, pack, cell } : null;
-            } catch (e) { return null; }
         }
 
         // "Allegro kurier DPD (Polska) [zmień]" -> "allegro kurier dpd"
@@ -389,7 +438,7 @@
             return null;
         }
 
-        // --- Wysyłanie gabarytów: skopiowane 1:1 z dawnych działów ---
+        // --- Wysyłanie gabarytów ---
         const postGateway = body => IAI.ajax.post('/panel/ajax/packages-gateway.php', '', body);
 
         function gaugeHandler(type, data) {
@@ -469,18 +518,15 @@
             el.blur();
         }
 
+        // Widoczne komunikaty panelu (poza własnymi okienkami generowania)
+        const panelAlerts = () => [...document.querySelectorAll('.yui-panel-container, .bootbox, .modal.in, .ui-dialog')]
+            .filter(e => visible(e) && !/^(windowTopLayer_c|teporaryStorageView_c|wait_c|ajax_c)$/.test(e.id));
         function findPanelAlert() {
-            const known = /^(windowTopLayer_c|teporaryStorageView_c|wait_c|ajax_c)$/;
-            const el = [...document.querySelectorAll('.yui-panel-container, .bootbox, .modal.in, .ui-dialog')]
-                .find(e => visible(e) && !known.test(e.id) && e.innerText.trim());
+            const el = panelAlerts().find(e => e.innerText.trim());
             return el ? el.innerText.replace(/\s+/g, ' ').replace(/Close$/, '').trim() : '';
         }
-        function closePanelAlert() {
-            const known = /^(windowTopLayer_c|teporaryStorageView_c|wait_c|ajax_c)$/;
-            [...document.querySelectorAll('.yui-panel-container, .bootbox, .modal.in, .ui-dialog')]
-                .filter(e => visible(e) && !known.test(e.id))
-                .forEach(e => kq('a.container-close, .close, .bootbox-close-button', e)?.click());
-        }
+        const closePanelAlert = () => panelAlerts()
+            .forEach(e => kq('a.container-close, .close, .bootbox-close-button', e)?.click());
 
         const BOX_SVG = `<svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
             <path d="M16 3 4 8.5v15L16 29l12-5.5v-15z" fill="#c8894a"/>
@@ -558,8 +604,6 @@
         }
         const setSelected = box => GM_setValue(SELECTED_KEY, box ? box.name : null);
 
-        const log = (...a) => console.log('[Kartony]', ...a);
-
         let toast, toastTimer;
         function setStatus(state, text) {
             if (mainBtn && mainBtn.isConnected) {
@@ -576,7 +620,6 @@
             clearTimeout(toastTimer);
             if (state === 'ok') toastTimer = setTimeout(() => toast.remove(), 8000);
             if (state === 'err') toast.onclick = () => toast.remove();
-            log(text);
         }
 
         function showSelected() {
@@ -622,13 +665,6 @@
                 setVal(kq('#fg_Width', panel), box.w);
                 setVal(kq('#fg_Length', panel), box.l);
 
-                if (DRY_RUN) {
-                    setStatus('ok', `Wpisano ${box.h}×${box.w}×${box.l} (test)`);
-                    busy = false;
-                    setTimeout(showSelected, 4000);
-                    return;
-                }
-
                 const submit = panel.querySelector('input.formbutton[type=submit], button[type=submit]');
                 if (!submit) throw new Error('brak przycisku Generuj');
 
@@ -643,7 +679,6 @@
                         && !visible(kq('#windowTopLayer_c')) && !panelBusy();
                 }, 30000);
                 if (!takePending()) return;
-                log('krok 1 OK (bez przeładowania)');
                 await finishLabel(box);
             } catch (e) {
                 clearPending();
@@ -652,7 +687,6 @@
                 setTimeout(showSelected, 8000);
             }
         }
-
 
         const PENDING_KEY = 'krbPending';
         const orderId = () => new URLSearchParams(location.search).get('idt') || '';
@@ -679,7 +713,6 @@
                     await waitFor(() => !panelBusy(), 30000);
                     const again = kq('a.generateNumber22');
                     if (!again) throw new Error('brak linku generowania (sprawdź numer przesyłki)');
-                    log('krok 2, próba', i + 1);
                     again.click();
                     const r = await waitFor(() => {
                         const p = kq('#teporaryStorageView_c');
@@ -700,7 +733,6 @@
                     if (r !== 'retry') pdf = r;
                 }
                 if (!pdf) throw new Error(lastMsg || 'etykieta nie pojawiła się na liście');
-                log('etykieta', pdf.textContent.trim());
                 // Nic nie otwieramy – okienko IdoSell z listą etykiet zostaje na ekranie
                 setStatus('ok', `Etykieta gotowa (${box.name})`);
             } catch (e) {
@@ -722,7 +754,6 @@
         function onOutside(e) { if (pop && !pop.contains(e.target) && !e.target.closest('.krb-bar')) closePop(); }
         function onEsc(e) { if (e.key === 'Escape') closePop(); }
 
-        //wybór kartonu
         function openPop(anchor) {
             closePop();
             pop = document.createElement('div');
@@ -747,73 +778,17 @@
                         setSelected(b); showSelected(); closePop();
                     };
 
-                    // Przeciąganie całego kafelka
                     t.onpointerdown = e => {
                         if (e.button !== 0 || e.target.closest('.del') || boxes.length < 2) return;
                         e.preventDefault(); // bez zaznaczania tekstu; click nadal przychodzi
-                        const tiles = [...pop.querySelectorAll('.krb-tile')];
-                        const tops = tiles.map(x => x.getBoundingClientRect().top);
-                        const step = tops[1] - tops[0];
-                        const minDy = tops[0] - tops[i], maxDy = tops[tiles.length - 1] - tops[i];
-                        const y0 = e.clientY;
-                        let dragging = false, to = i;
-
-                        const place = n => tiles.forEach((x, j) => {
-                            if (j === i) return;
-                            const shift = (i < n && j > i && j <= n) ? -step : (n < i && j >= n && j < i) ? step : 0;
-                            x.style.transform = shift ? `translateY(${shift}px)` : '';
-                        });
-                        // Nasłuch na całym oknie
-                        const finish = () => {
-                            window.removeEventListener('pointermove', onMove, true);
-                            window.removeEventListener('pointerup', onUp, true);
-                            window.removeEventListener('pointercancel', cancel, true);
-                            window.removeEventListener('keydown', onKey, true);
-                            pop.classList.remove('sorting');
-                        };
-                        const cancel = () => {
-                            finish();
-                            t.classList.remove('lift');
-                            tiles.forEach(x => { x.style.transform = ''; });
-                        };
-                        const onKey = ev => { if (ev.key === 'Escape' && dragging) { ev.stopPropagation(); cancel(); } };
-
-                        const onMove = ev => {
-                            const dy = ev.clientY - y0;
-                            if (!dragging) {
-                                if (Math.abs(dy) < 5) return;
-                                dragging = true;
-                                t.classList.add('lift');
-                                pop.classList.add('sorting');
-                                window.addEventListener('keydown', onKey, true);
-                            }
-                            const d = Math.max(minDy, Math.min(maxDy, dy));
-                            t.style.transform = `translateY(${d}px) scale(1.02)`;
-                            const n = Math.max(0, Math.min(tiles.length - 1, Math.round(i + d / step)));
-                            if (n !== to) { to = n; place(to); }
-                        };
-                        const onUp = ev => {
-                            if (!dragging && Math.abs(ev.clientY - y0) >= 5) onMove(ev); // szybki ruch bez pośrednich pozycji
-                            if (!dragging) { finish(); return; }
-                            justDragged = true;
-                            setTimeout(() => { justDragged = false; }, 0); // gdyby click nie przyszedł
-                            finish();
-                            // Dojazd do slotu, potem zapis nowej kolejności
-                            t.classList.remove('lift');
-                            t.classList.add('settle');
-                            t.style.transform = `translateY(${(to - i) * step}px)`;
-                            setTimeout(() => {
-                                if (to !== i) {
-                                    const [moved] = boxes.splice(i, 1);
-                                    boxes.splice(to, 0, moved);
-                                    saveBoxes(boxes);
-                                }
+                        dragSort(e, [...pop.querySelectorAll('.krb-tile')], i, {
+                            lift: 'lift', settle: 'settle', sorting: 'sorting', box: pop, scale: ' scale(1.02)',
+                            onRelease: () => { justDragged = true; setTimeout(() => { justDragged = false; }, 0); },
+                            onDrop: to => {
+                                if (to !== i) { const [m] = boxes.splice(i, 1); boxes.splice(to, 0, m); saveBoxes(boxes); }
                                 render(); showSelected();
-                            }, 160);
-                        };
-                        window.addEventListener('pointermove', onMove, true);
-                        window.addEventListener('pointerup', onUp, true);
-                        window.addEventListener('pointercancel', cancel, true);
+                            },
+                        });
                     };
                     const del = document.createElement('span');
                     del.className = 'del'; del.title = 'Usuń'; del.textContent = '✕';
@@ -912,7 +887,7 @@
         let pakDone = false;
         function renderPackaging() {
             if (pakDone) return;
-            const data = pakData();
+            const data = orderPackage();
             const type = packagingType(data);
             if (type === undefined) return; // strona jeszcze się ładuje – kolejna próba
             try {
@@ -926,7 +901,6 @@
                     gabarytKafelki(cell, gaugeHandler(type, data));
                 }
                 if (type && type !== 'box') $('#msg_line_msg').remove();
-                log('pakowanie:', type || 'nic');
             } catch (e) {
                 console.error('[Pakowanie]', e);
             }
@@ -962,19 +936,12 @@
                 data: `id=stocksQuantity&url=/panel/ajax/product-edit-aceform-tables.php%3Fname%3Dquantity%26idt%3D${idt}%26filtered%3Dfalse`,
                 onload: function (response) {
                     try {
-                        const parser = new DOMParser();
-                        const doc = parser.parseFromString(response.responseText, 'text/html');
-                        const allRows = doc.querySelectorAll('table tbody tr');
-                        let row = null;
-                        allRows.forEach(r => {
-                            const cells = r.querySelectorAll('td');
-                            if (!row && cells.length >= 2 && cells[1].textContent.trim() !== '' && cells[1].textContent.trim() !== '-') {
-                                row = r;
-                            }
-                        });
-                        if (!row) { callback(null); return; }
-                        const cells = row.querySelectorAll('td');
-                        callback(cells[1] ? cells[1].textContent.trim() : null);
+                        const doc = new DOMParser().parseFromString(response.responseText, 'text/html');
+                        // pierwszy wiersz z niepustą ilością
+                        const qty = [...doc.querySelectorAll('table tbody tr')]
+                            .map(tr => tr.querySelectorAll('td')[1]?.textContent.trim())
+                            .find(v => v && v !== '-');
+                        callback(qty || null);
                     } catch (e) {
                         callback(null);
                     }
@@ -983,36 +950,19 @@
             });
         }
 
-        function makeBadgeM1(m1) {
-            const qty = parseInt(m1, 10);
-            if (m1 === null) {
-            }
-            let displayM1 = m1 !== null ? m1 : '-';
-            if (m1 === 'jest') {
-                displayM1 = "<i> elektronicznie </i>";
-            }
-
-            if (qty === 0 || m1 === '0') {
-                displayM1 = 'BRAK';
-            }
-
+        function badgeM1(html) {
             const d = document.createElement('div');
             d.className = 'm1-stock-badge';
-            d.style.cssText = `
-            margin-top:4px;
-            padding:2px 8px;
-            border-radius:4px;
-            font-size:12px;
-            display:inline-block;
-            background:#FDF5E6;
-            border:1px solid #D2B48C;
-            color:#721c24;
-            `;
-
-            d.innerHTML = `📦 M1: <strong>${displayM1}</strong>`;
+            d.style.cssText = 'margin-top:4px;padding:2px 8px;border-radius:4px;font-size:12px;display:inline-block;background:#FDF5E6;border:1px solid #D2B48C;color:#721c24';
+            d.innerHTML = `📦 M1: <strong>${html}</strong>`;
             return d;
         }
 
+        function m1Text(m1) {
+            if (m1 === null) return '-';
+            if (m1 === 'jest') return '<i> elektronicznie </i>';
+            return parseInt(m1, 10) === 0 ? 'BRAK' : m1;
+        }
 
         function processLinksM1() {
             document.querySelectorAll('a[onclick*="showProductInfo"]').forEach(a => {
@@ -1029,40 +979,18 @@
                 const nameTd = tr.querySelector('td[class*="col-name"]');
                 if (!nameTd) return;
 
-                let lokalizacjeP = null;
-                nameTd.querySelectorAll('p').forEach(p => {
-                    if (!lokalizacjeP && p.textContent.includes('Lokalizacje:')) {
-                        lokalizacjeP = p;
-                    }
-                });
-                if (!lokalizacjeP) return;
-                if (lokalizacjeP.parentElement.querySelector('.m1-stock-badge')) return;
+                const lokalizacjeP = [...nameTd.querySelectorAll('p')].find(p => p.textContent.includes('Lokalizacje:'));
+                if (!lokalizacjeP || lokalizacjeP.parentElement.querySelector('.m1-stock-badge')) return;
 
-                const placeholder = document.createElement('div');
-                placeholder.className = 'm1-stock-badge';
-                placeholder.style.cssText = `
-                margin-top:4px;
-                padding:2px 8px;
-                border-radius:4px;
-                font-size:12px;
-                display:inline-block;
-                background:#FDF5E6;
-                border:1px solid #D2B48C;
-                color:#721c24;`;
-                placeholder.innerHTML = '📦 M1: <strong>ładowanie…</strong>';
+                const placeholder = badgeM1('ładowanie…');
                 lokalizacjeP.insertAdjacentElement('afterend', placeholder);
-
-                fetchM1(idt, function (m1) {
-                    placeholder.replaceWith(makeBadgeM1(m1));
-                });
+                fetchM1(idt, m1 => placeholder.replaceWith(badgeM1(m1Text(m1))));
             });
         }
 
-        const observerM1 = new MutationObserver(processLinksM1);
-        observerM1.observe(document.documentElement, { childList: true, subtree: true });
+        new MutationObserver(processLinksM1).observe(document.documentElement, { childList: true, subtree: true });
         processLinksM1();
     }
-
 
     // ════════════════════════════════════════════════════════════════════════
     // UKRYJ WIERSZE W HISTORII ZAMÓWIENIA
@@ -1075,35 +1003,21 @@
         ];
         const MARK_ATTR = 'data-tm-hidden-by-script';
         let hiddenCount = 0;
-        let summaryEl = null;
-        let toggleBtn = null;
         let showingHidden = false;
 
-        function shouldHideRowText(text) {
-            const t = (text || '').trim();
-            return NEEDLE_PHRASES.some(p => t.includes(p));
-        }
+        const shouldHideRowText = text => NEEDLE_PHRASES.some(p => text.includes(p));
 
-        function insertUIAfterAnchor() {
+        function ensureUI() {
             const anchor = document.querySelector('div.hd#orderHistoryDiv_h');
             if (!anchor || !anchor.parentNode) return false;
             if (document.getElementById('tm-hidden-rows-summary')) return true;
 
-            summaryEl = document.createElement('div');
+            const summaryEl = document.createElement('div');
             summaryEl.id = 'tm-hidden-rows-summary';
             summaryEl.textContent = 'Skrypt ukrył 0 wierszy';
-            summaryEl.style.cssText =`
-            margin:12px 0 8px 0;
-            padding:10px 12px;
-            border:2px solid #d00;
-            color:#d00;
-            font-weight:700;
-            background:#fff5f5;
-            font-family:Arial,sans-serif;
-            font-size:14px;';
-            `
+            summaryEl.style.cssText = 'margin:12px 0 8px;padding:10px 12px;border:2px solid #d00;color:#d00;font-weight:700;background:#fff5f5;font-family:Arial,sans-serif;font-size:14px';
 
-            toggleBtn = document.createElement('button');
+            const toggleBtn = document.createElement('button');
             toggleBtn.type = 'button';
             toggleBtn.id = 'tm-toggle-hidden-rows';
             toggleBtn.textContent = 'Pokaż ukryte';
@@ -1122,8 +1036,6 @@
             return true;
         }
 
-        function ensureUI() { insertUIAfterAnchor(); }
-
         function updateSummaryHistory() {
             ensureUI();
             const el = document.getElementById('tm-hidden-rows-summary');
@@ -1135,7 +1047,7 @@
             for (const tr of rows) {
                 if (!(tr instanceof HTMLElement)) continue;
                 if (tr.hasAttribute(MARK_ATTR)) continue;
-                if (shouldHideRowText(tr.textContent || '')) {
+                if (shouldHideRowText(tr.textContent)) {
                     tr.setAttribute(MARK_ATTR, '1');
                     tr.style.display = showingHidden ? '' : 'none';
                     hiddenCount += 1;
@@ -1190,7 +1102,6 @@
             startHistory();
         }
     }
-
 
     // ════════════════════════════════════════════════════════════════════════
     // ALLEGRO OPISY KURIERÓW
@@ -1268,12 +1179,8 @@
                 const label = document.createElement('div');
                 label.className = 'tm-courier-label';
                 label.textContent = shortName;
-                label.style.fontSize = '11px';     // „Paczkomat” mieści się w wąskiej kolumnie bez łamania słowa
-                label.style.fontWeight = '600';
-                label.style.lineHeight = '1.3';
-                label.style.marginTop = '4px';
-                label.style.color = '#333';
-                label.style.whiteSpace = 'pre-line';   // „\n” w podpisie = nowa linia
+                // 11px: „Paczkomat” mieści się w kolumnie; pre-line: „\n” = nowa linia
+                label.style.cssText = 'font-size:11px;font-weight:600;line-height:1.3;margin-top:4px;color:#333;white-space:pre-line';
                 parent.appendChild(label);
             });
         }
@@ -1281,7 +1188,6 @@
         addCourierLabels();
         new MutationObserver(addCourierLabels).observe(document.documentElement, { childList: true, subtree: true });
     }
-
 
     // ════════════════════════════════════════════════════════════════════════
     // SN-y WIĘKSZY PRZYCISK
@@ -1329,7 +1235,6 @@
         new MutationObserver(convertLinks).observe(document.documentElement, { childList: true, subtree: true });
     }
 
-
     // ════════════════════════════════════════════════════════════════════════
     // LINKI Z ZAM DO ALLEGRO
     // ════════════════════════════════════════════════════════════════════════
@@ -1340,12 +1245,10 @@
         var empikUrl = "https://marketplace.empik.com/mmp/shop/order/";
 
         function detectSource(li) {
+            var sel = 'img[title="Empik"], img[title="Allegro"]';
             var container = li.closest("fieldset, .box, .panel, .content, .section, form, body") || document.body;
-            var img = container.querySelector('img[title="Empik"], img[title="Allegro"]');
-            if (img) return (img.getAttribute("title") || "").trim();
-            img = document.querySelector('img[title="Empik"], img[title="Allegro"]');
-            if (img) return (img.getAttribute("title") || "").trim();
-            return "";
+            var img = container.querySelector(sel) || document.querySelector(sel);
+            return img ? img.getAttribute("title").trim() : "";
         }
 
         function addAllegroButton(orderId) {
@@ -1356,18 +1259,7 @@
             btn.target = "_blank";
             btn.rel = "noopener noreferrer";
             btn.textContent = "Allegro";
-            btn.style.position = "fixed";
-            btn.style.right = "16px";
-            btn.style.bottom = "16px";
-            btn.style.zIndex = "9999";
-            btn.style.padding = "10px 16px";
-            btn.style.background = "#ff5a00";
-            btn.style.color = "#fff";
-            btn.style.fontSize = "14px";
-            btn.style.fontWeight = "700";
-            btn.style.borderRadius = "6px";
-            btn.style.textDecoration = "none";
-            btn.style.boxShadow = "0 2px 6px rgba(0,0,0,.3)";
+            btn.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:9999;padding:10px 16px;background:#ff5a00;color:#fff;font-size:14px;font-weight:700;border-radius:6px;text-decoration:none;box-shadow:0 2px 6px rgba(0,0,0,.3)';
             btn.onmouseenter = function () { btn.style.background = "#e64e00"; };
             btn.onmouseleave = function () { btn.style.background = "#ff5a00"; };
             document.body.appendChild(btn);
@@ -1411,7 +1303,6 @@
         setTimeout(runAllegroEmpik, 1500);
     }
 
-
     // ════════════════════════════════════════════════════════════════════════
     // INNE ZAMÓWIENIA KLIENTA W REALIZACJI
     // ════════════════════════════════════════════════════════════════════════
@@ -1427,22 +1318,7 @@
 
             const box = document.createElement('div');
             box.id = 'tm-order-box';
-            box.style.cssText = `
-            position:fixed;
-            top:60px;right:20px;
-            z-index:99999;
-            background:#c62828;
-            color:#fff;
-
-            font-family:Arial,sans-serif;
-            font-size:13px;
-            font-weight:bold;
-            padding:12px 16px;
-            border-radius:6px;
-            box-shadow:0 4px 16px rgba(0,0,0,0.4);
-            max-width:280px;
-            line-height:1.6;
-            `;
+            box.style.cssText = 'position:fixed;top:60px;right:20px;z-index:99999;background:#c62828;color:#fff;font-family:Arial,sans-serif;font-size:13px;font-weight:bold;padding:12px 16px;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.4);max-width:280px;line-height:1.6';
 
             const title = document.createElement('div');
             title.style.cssText = 'font-size:15px;margin-bottom:8px;';
@@ -1478,7 +1354,6 @@
         }
     }
 
-
     // ════════════════════════════════════════════════════════════════════════
     // DUPLIKATY KLIENTÓW HIGHLIGHT
     // ════════════════════════════════════════════════════════════════════════
@@ -1496,22 +1371,12 @@
                 if (!nameMap.has(name)) nameMap.set(name, []);
                 nameMap.get(name).push(b);
             });
-            nameMap.forEach((elements, name) => {
-                if (elements.length > 1) {
-                    elements.forEach(b => {
-                        b.style.cssText = `
-                        background:#fff176;
-                        color:#b71c1c;
-                        padding:1px 4px;
-                        border-radius:3px;
-                        outline:2px solid #e53935;`
-
-                        b.title = `Ten klient ma ${elements.length} zamówienia na liście`;
-                    });
-
-                } else {
-                    elements.forEach(b => b.style.cssText = '');
-                }
+            nameMap.forEach(elements => {
+                const dup = elements.length > 1;
+                elements.forEach(b => {
+                    b.style.cssText = dup ? 'background:#fff176;color:#b71c1c;padding:1px 4px;border-radius:3px;outline:2px solid #e53935' : '';
+                    if (dup) b.title = `Ten klient ma ${elements.length} zamówienia na liście`;
+                });
             });
         }
 
@@ -1529,7 +1394,6 @@
             runDuplicates();
         }
     }
-
 
     // ════════════════════════════════════════════════════════════════════════
     // "ZAREJESTROWANE PRZEZ API" NA ZIELONO
@@ -1582,301 +1446,286 @@
     // MEGABAR
     // ════════════════════════════════════════════════════════════════════════
 
-if (url.includes('megadron.pl/pl/products')) {
-    const skuFromUrl = (window.location.pathname.match(/-(\d+)\.html$/) || [])[1];
+    if (url.includes('megadron.pl/pl/products')) {
+        const skuFromUrl = (window.location.pathname.match(/-(\d+)\.html$/) || [])[1];
 
-    if (skuFromUrl) {
-        function waitForElement(selector, callback, timeout = 10000) {
-            const el = document.querySelector(selector);
-            if (el) { callback(el); return; }
-            const observer = new MutationObserver(() => {
+        if (skuFromUrl) {
+            function waitForElement(selector, callback, timeout = 10000) {
                 const el = document.querySelector(selector);
-                if (el) { observer.disconnect(); callback(el); }
-            });
-            observer.observe(document.documentElement, { childList: true, subtree: true });
-            setTimeout(() => observer.disconnect(), timeout);
-        }
+                if (el) { callback(el); return; }
+                const observer = new MutationObserver(() => {
+                    const el = document.querySelector(selector);
+                    if (el) { observer.disconnect(); callback(el); }
+                });
+                observer.observe(document.documentElement, { childList: true, subtree: true });
+                setTimeout(() => observer.disconnect(), timeout);
+            }
 
-        const baseStyle = `
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 4px 10px;
-            margin-right: 8px;
-            margin-bottom: 8px;
-            background-color: #f8f9fa;
-            border: 1px solid #e2e8f0;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: 500;
-            color: #334155;
-            text-decoration: none;
-            white-space: nowrap;
-            width: fit-content;
-            line-height: 1.2;
-            box-sizing: border-box;
-            transition: all 0.2s ease;
-        `;
+            const baseStyle = `
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                padding: 4px 10px;
+                margin-right: 8px;
+                margin-bottom: 8px;
+                background-color: #f8f9fa;
+                border: 1px solid #e2e8f0;
+                border-radius: 4px;
+                font-size: 12px;
+                font-weight: 500;
+                color: #334155;
+                text-decoration: none;
+                white-space: nowrap;
+                width: fit-content;
+                line-height: 1.2;
+                box-sizing: border-box;
+                transition: all 0.2s ease;
+            `;
 
-        // ikonki style
-        const iconPin = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-10a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>`;
-        const iconCheck = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
-        const iconCross = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
-        const iconLink = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
+                const iconPin = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-10a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>`;
+            const iconCheck = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
+            const iconCross = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
+            const iconLink = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
 
-        waitForElement('.product_name__actions', function (actionsBar) {
+            waitForElement('.product_name__actions', function (actionsBar) {
 
-            // 1. badge DYSPOZYCYJNY
-            const badgeDysp = document.createElement('div');
-            badgeDysp.style.cssText = baseStyle;
-            badgeDysp.innerHTML = `${iconCheck} <span>Dyspozycyjny M1: <strong>ładowanie...</strong></span>`;
+                // 1. badge DYSPOZYCYJNY
+                const badgeDysp = document.createElement('div');
+                badgeDysp.style.cssText = baseStyle;
+                badgeDysp.innerHTML = `${iconCheck} <span>Dyspozycyjny M1: <strong>ładowanie...</strong></span>`;
 
-            // 2. badge LOKALIZACJA
-            const badgeLoc = document.createElement('div');
-            badgeLoc.style.cssText = baseStyle;
-            badgeLoc.innerHTML = `${iconPin} <strong>ładowanie...</strong>`;
+                // 2. badge LOKALIZACJA
+                const badgeLoc = document.createElement('div');
+                badgeLoc.style.cssText = baseStyle;
+                badgeLoc.innerHTML = `${iconPin} <strong>ładowanie...</strong>`;
 
-            // 3. badge IDOSELL
-            const badgeIdosell = document.createElement('a');
-            badgeIdosell.href = `https://client6220.idosell.com/panel/app/product.php?idt=${skuFromUrl}`;
-            badgeIdosell.target = '_blank';
-            badgeIdosell.rel = 'noopener noreferrer';
-            badgeIdosell.style.cssText = baseStyle + `cursor: pointer;`;
-            badgeIdosell.innerHTML = `<span>Idosell</span> ${iconLink}`;
+                // 3. badge IDOSELL
+                const badgeIdosell = document.createElement('a');
+                badgeIdosell.href = `https://client6220.idosell.com/panel/app/product.php?idt=${skuFromUrl}`;
+                badgeIdosell.target = '_blank';
+                badgeIdosell.rel = 'noopener noreferrer';
+                badgeIdosell.style.cssText = baseStyle + `cursor: pointer;`;
+                badgeIdosell.innerHTML = `<span>Idosell</span> ${iconLink}`;
 
-            badgeIdosell.onmouseover = () => {
-                badgeIdosell.style.borderColor = '#cbd5e1';
-                badgeIdosell.style.backgroundColor = '#f1f5f9';
-            };
-            badgeIdosell.onmouseout = () => {
-                badgeIdosell.style.borderColor = '#e2e8f0';
-                badgeIdosell.style.backgroundColor = '#f8f9fa';
-            };
+                badgeIdosell.onmouseover = () => {
+                    badgeIdosell.style.borderColor = '#cbd5e1';
+                    badgeIdosell.style.backgroundColor = '#f1f5f9';
+                };
+                badgeIdosell.onmouseout = () => {
+                    badgeIdosell.style.borderColor = '#e2e8f0';
+                    badgeIdosell.style.backgroundColor = '#f8f9fa';
+                };
 
-            actionsBar.insertAdjacentElement('afterbegin', badgeIdosell);
-            actionsBar.insertAdjacentElement('afterbegin', badgeLoc);
-            actionsBar.insertAdjacentElement('afterbegin', badgeDysp);
+                actionsBar.insertAdjacentElement('afterbegin', badgeIdosell);
+                actionsBar.insertAdjacentElement('afterbegin', badgeLoc);
+                actionsBar.insertAdjacentElement('afterbegin', badgeDysp);
 
+                // ────────────────────────────────────────────────────────────────
+                // LOKALIZACJA
+                // ────────────────────────────────────────────────────────────────
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: 'https://client6220.idosell.com/panel/ajax/product-location.php',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Referer': `https://client6220.idosell.com/panel/product-edit.php?idt=${skuFromUrl}`
+                    },
+                    data: `action=getLocations&product=${skuFromUrl}`,
+                    onload: function (response) {
+                        try {
+                            const json = JSON.parse(response.responseText);
+                            const doc = new DOMParser().parseFromString(json.htmlData, 'text/html');
+                            const lokalizacja = [...doc.querySelectorAll('input[type="text"][name*="location_id_sel[1]"]')]
+                                .map(i => i.value.trim()).find(Boolean);
 
-            // ────────────────────────────────────────────────────────────────
-            // LOKALIZACJA
-            // ────────────────────────────────────────────────────────────────
-            GM_xmlhttpRequest({
-                method: 'POST',
-                url: 'https://client6220.idosell.com/panel/ajax/product-location.php',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Referer': `https://client6220.idosell.com/panel/product-edit.php?idt=${skuFromUrl}`
-                },
-                data: `action=getLocations&product=${skuFromUrl}`,
-                onload: function (response) {
-                    try {
-                        const json = JSON.parse(response.responseText);
-                        const doc = new DOMParser().parseFromString(json.htmlData, 'text/html');
-                        const inputs = doc.querySelectorAll('input[type="text"][name*="location_id_sel[1]"]');
-                        let lokalizacja = null;
-
-                        inputs.forEach(input => {
-                            if (input.value && input.value.trim() !== '' && !lokalizacja) {
-                                lokalizacja = input.value.trim();
+                            if (lokalizacja) {
+                                badgeLoc.innerHTML = `${iconPin} <span> Lokalizacja: <strong>${lokalizacja}</strong></span>`;
+                            } else {
+                                badgeLoc.innerHTML = `${iconPin} <span style="color:#64748b;">brak lokalizacji</span>`;
                             }
-                        });
-
-                        if (lokalizacja) {
-                            badgeLoc.innerHTML = `${iconPin} <span> Lokalizacja: <strong>${lokalizacja}</strong></span>`;
-                        } else {
-                            badgeLoc.innerHTML = `${iconPin} <span style="color:#64748b;">brak lokalizacji</span>`;
+                        } catch (e) {
+                            badgeLoc.innerHTML = `${iconCross} <span style="color:#dc2626;">błąd lokalizacji</span>`;
                         }
-                    } catch (e) {
-                        badgeLoc.innerHTML = `${iconCross} <span style="color:#dc2626;">błąd lokalizacji</span>`;
+                    },
+                    onerror: function () {
+                        badgeLoc.innerHTML = `${iconCross} <span style="color:#dc2626;">błąd połączenia</span>`;
                     }
-                },
-                onerror: function () {
-                    badgeLoc.innerHTML = `${iconCross} <span style="color:#dc2626;">błąd połączenia</span>`;
-                }
-            });
+                });
 
+                // ────────────────────────────────────────────────────────────────
+                // DYSPOZYCYJNY M1
+                // ────────────────────────────────────────────────────────────────
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: `https://client6220.idosell.com/panel/ajax/product-edit-aceform-tables.php?name=reserved&idt=${skuFromUrl}&filtered=false`,
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Referer': `https://client6220.idosell.com/panel/product-edit.php?idt=${skuFromUrl}`
+                    },
+                    data: `id=stocksReserved&url=/panel/ajax/product-edit-aceform-tables.php%3Fname%3Dreserved%26idt%3D${skuFromUrl}%26filtered%3Dfalse`,
+                    onload: function (response) {
+                        try {
+                            const doc = new DOMParser().parseFromString(response.responseText, 'text/html');
+                            const row = doc.querySelector('table tbody tr');
 
-            // ────────────────────────────────────────────────────────────────
-            // DYSPOZYCYJNY M1
-            // ────────────────────────────────────────────────────────────────
-            GM_xmlhttpRequest({
-                method: 'POST',
-                url: `https://client6220.idosell.com/panel/ajax/product-edit-aceform-tables.php?name=reserved&idt=${skuFromUrl}&filtered=false`,
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Referer': `https://client6220.idosell.com/panel/product-edit.php?idt=${skuFromUrl}`
-                },
-                data: `id=stocksReserved&url=/panel/ajax/product-edit-aceform-tables.php%3Fname%3Dreserved%26idt%3D${skuFromUrl}%26filtered%3Dfalse`,
-                onload: function (response) {
-                    try {
-                        const doc = new DOMParser().parseFromString(response.responseText, 'text/html');
-                        const row = doc.querySelector('table tbody tr');
+                            if (!row) {
+                                badgeDysp.innerHTML = `${iconCross} <span>Dyspozycyjny M1: <strong>brak danych</strong></span>`;
+                                return;
+                            }
 
-                        if (!row) {
-                            badgeDysp.innerHTML = `${iconCross} <span>Dyspozycyjny M1: <strong>brak danych</strong></span>`;
-                            return;
+                            const parsedVal = parseInt(row.querySelectorAll('td')[1]?.textContent, 10) || 0;
+
+                            if (parsedVal > 0) {
+                                badgeDysp.innerHTML = `${iconCheck} <span>Dyspozycyjny M1: <strong>${parsedVal}</strong></span>`;
+                            } else {
+                                badgeDysp.innerHTML = `${iconCross} <span>Dyspozycyjny M1: <strong>BRAK</strong></span>`;
+                            }
+                        } catch (e) {
+                            badgeDysp.innerHTML = `${iconCross} <span style="color:#dc2626;">Dyspozycyjny M1: <strong>ERROR</strong></span>`;
                         }
-
-                        const cells = row.querySelectorAll('td');
-                        const raw = cells[1] ? cells[1].textContent.trim() : '-';
-                        const val = raw === '-' ? 0 : parseInt(raw, 10);
-                        const parsedVal = isNaN(val) ? 0 : val;
-
-                        if (parsedVal > 0) {
-                            badgeDysp.innerHTML = `${iconCheck} <span>Dyspozycyjny M1: <strong>${parsedVal}</strong></span>`;
-                        } else {
-                            badgeDysp.innerHTML = `${iconCross} <span>Dyspozycyjny M1: <strong>BRAK</strong></span>`;
-                        }
-                    } catch (e) {
-                        badgeDysp.innerHTML = `${iconCross} <span style="color:#dc2626;">Dyspozycyjny M1: <strong>ERROR</strong></span>`;
+                    },
+                    onerror: function () {
+                        badgeDysp.innerHTML = `${iconCross} <span style="color:#dc2626;">Zaloguj do IdoSell</span>`;
                     }
-                },
-                onerror: function () {
-                    badgeDysp.innerHTML = `${iconCross} <span style="color:#dc2626;">Zaloguj do IdoSell</span>`;
-                }
-            });
+                });
 
-        });
+            });
+        }
     }
-}
+
     // ════════════════════════════════════════════════════════════════════════
     // NUMERY SERYJNE - REAKCJA NA ENTER/SKANER + TOAST Z SN'AMI
     // ════════════════════════════════════════════════════════════════════════
 
     if (url.includes('/panel/order-verification.php')) {
-        (function () {
-    'use strict';
-
-    function getSerialInputs() {
-        return document.querySelectorAll('#addPosition input[id^="fg_serialnumber"]');
-    }
-
-    function getSaveButton() {
-        return document.querySelector('#addPosition input.formbutton[type="button"]');
-    }
-
-    function getCodeField() {
-        return document.getElementById('fg_code');
-    }
-
-    function isPanelVisible() {
-        const c = document.getElementById('addPosition_c');
-        if (!c) return false;
-        return c.style.visibility !== 'hidden' && c.offsetParent !== null;
-    }
-
-    function focusCodeField() {
-        const codeInput = getCodeField();
-        if (!codeInput) return;
-
-        codeInput.focus();
-        codeInput.dispatchEvent(new MouseEvent('click', {
-            bubbles: true,
-            cancelable: true,
-            view: window
-        }));
-    }
-
-    const TOAST_DURATION_MS = 2500;
-
-    function showSavedToast(serials) {
-        const toast = document.createElement('div');
-
-        serials.forEach(function (s) {
-            const line = document.createElement('div');
-            line.textContent = 'Nr ' + s.index + ': ' + s.value;
-            toast.appendChild(line);
-        });
-
-        Object.assign(toast.style, {
-            position: 'fixed',
-            top: '25vh',
-            left: '50%',
-            zIndex: '999999',
-            background: '#323232',
-            color: '#fff',
-            padding: '12px 22px',
-            borderRadius: '8px',
-            fontSize: '14px',
-            fontFamily: 'Arial, sans-serif',
-            boxShadow: '0 2px 10px rgba(0,0,0,0.3)',
-            opacity: '0',
-            textAlign: 'center',
-            lineHeight: '1.5',
-            transform: 'translateX(-50%) translateY(-12px)',
-            transition: 'opacity 0.25s ease, transform 0.25s ease',
-            pointerEvents: 'none'
-        });
-
-        document.body.appendChild(toast);
-
-        requestAnimationFrame(() => {
-            toast.style.opacity = '1';
-            toast.style.transform = 'translateX(-50%) translateY(0)';
-        });
-
-        setTimeout(() => {
-            toast.style.opacity = '0';
-            toast.style.transform = 'translateX(-50%) translateY(-12px)';
-            setTimeout(() => toast.remove(), 300);
-        }, TOAST_DURATION_MS);
-    }
-
-    document.addEventListener('click', function (e) {
-        const saveBtn = getSaveButton();
-        if (!saveBtn || e.target !== saveBtn) return;
-
-        const inputs = getSerialInputs();
-        const serials = Array.from(inputs)
-            .map(function (inp, idx) {
-                return { index: idx + 1, value: (inp.value || '').trim() };
-            })
-            .filter(function (s) { return s.value !== ''; });
-
-        if (serials.length > 0) {
-            showSavedToast(serials);
+        function getSerialInputs() {
+            return document.querySelectorAll('#addPosition input[id^="fg_serialnumber"]');
         }
-    }, true);
 
-    let wasVisible = false;
-
-    const visibilityObserver = new MutationObserver(() => {
-        const nowVisible = isPanelVisible();
-        if (wasVisible && !nowVisible) {
-            setTimeout(focusCodeField, 50);
+        function getSaveButton() {
+            return document.querySelector('#addPosition input.formbutton[type="button"]');
         }
-        wasVisible = nowVisible;
-    });
 
-    visibilityObserver.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ['style'],
-        subtree: true
-    });
+        function getCodeField() {
+            return document.getElementById('fg_code');
+        }
 
-    document.addEventListener('keydown', function (e) {
-        if (e.key !== 'Enter') return;
+        function isPanelVisible() {
+            const c = document.getElementById('addPosition_c');
+            if (!c) return false;
+            return c.style.visibility !== 'hidden' && c.offsetParent !== null;
+        }
 
-        const target = e.target;
-        if (!target || !target.id || !target.id.startsWith('fg_serialnumber')) return;
+        function focusCodeField() {
+            const codeInput = getCodeField();
+            if (!codeInput) return;
 
-        const inputs = getSerialInputs();
-        const lastInput = inputs[inputs.length - 1];
+            codeInput.focus();
+            codeInput.dispatchEvent(new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                view: window
+            }));
+        }
 
-        if (target === lastInput) {
-            e.preventDefault();
-            e.stopPropagation();
+        const TOAST_DURATION_MS = 2500;
 
+        function showSavedToast(serials) {
+            const toast = document.createElement('div');
+
+            serials.forEach(function (s) {
+                const line = document.createElement('div');
+                line.textContent = 'Nr ' + s.index + ': ' + s.value;
+                toast.appendChild(line);
+            });
+
+            Object.assign(toast.style, {
+                position: 'fixed',
+                top: '25vh',
+                left: '50%',
+                zIndex: '999999',
+                background: '#323232',
+                color: '#fff',
+                padding: '12px 22px',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontFamily: 'Arial, sans-serif',
+                boxShadow: '0 2px 10px rgba(0,0,0,0.3)',
+                opacity: '0',
+                textAlign: 'center',
+                lineHeight: '1.5',
+                transform: 'translateX(-50%) translateY(-12px)',
+                transition: 'opacity 0.25s ease, transform 0.25s ease',
+                pointerEvents: 'none'
+            });
+
+            document.body.appendChild(toast);
+
+            requestAnimationFrame(() => {
+                toast.style.opacity = '1';
+                toast.style.transform = 'translateX(-50%) translateY(0)';
+            });
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateX(-50%) translateY(-12px)';
+                setTimeout(() => toast.remove(), 300);
+            }, TOAST_DURATION_MS);
+        }
+
+        document.addEventListener('click', function (e) {
             const saveBtn = getSaveButton();
-            if (saveBtn) {
-                saveBtn.click();
+            if (!saveBtn || e.target !== saveBtn) return;
+
+            const inputs = getSerialInputs();
+            const serials = Array.from(inputs)
+                .map(function (inp, idx) {
+                    return { index: idx + 1, value: (inp.value || '').trim() };
+                })
+                .filter(function (s) { return s.value !== ''; });
+
+            if (serials.length > 0) {
+                showSavedToast(serials);
             }
-        }
-    }, true);
-        })();
+        }, true);
+
+        let wasVisible = false;
+
+        const visibilityObserver = new MutationObserver(() => {
+            const nowVisible = isPanelVisible();
+            if (wasVisible && !nowVisible) {
+                setTimeout(focusCodeField, 50);
+            }
+            wasVisible = nowVisible;
+        });
+
+        visibilityObserver.observe(document.documentElement, {
+            attributes: true,
+            attributeFilter: ['style'],
+            subtree: true
+        });
+
+        document.addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter') return;
+
+            const target = e.target;
+            if (!target || !target.id || !target.id.startsWith('fg_serialnumber')) return;
+
+            const inputs = getSerialInputs();
+            const lastInput = inputs[inputs.length - 1];
+
+            if (target === lastInput) {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const saveBtn = getSaveButton();
+                if (saveBtn) {
+                    saveBtn.click();
+                }
+            }
+        }, true);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -1886,9 +1735,6 @@ if (url.includes('megadron.pl/pl/products')) {
     if (window.self === window.top && url.includes('/panel/') && !url.includes('/panel/app/client-deliveryaddress.php')
         && !/^\/panel\/app\/rma\/?$/.test(location.pathname)) { // okienko zmiany adresu (reklamacje) – bez Statusów
         const tmStatusyStart = () => {
-        (function () {
-          'use strict';
-
           // ---------- storage ----------
           const HOST = location.host;
           const K = (k) => `${HOST}:${k}`;
@@ -1897,7 +1743,7 @@ if (url.includes('megadron.pl/pl/products')) {
           };
           const save = (k, v) => { try { GM_setValue(K(k), JSON.stringify(v)); } catch (e) { /* ignore */ } };
 
-          const DEFAULT_SELECTED = ['wn', 'n', 'o', 'b', 'p', 'w'];
+          const DEFAULT_SELECTED = ['wn', 'n', 'o', 'b', 'p', 'p_odb', 'w'];
           const STATUS_TTL = 24 * 3600 * 1000;
           const PANEL_CONCURRENCY = 2;   // zapytania do listy zamówień panelu (tylko to, czego nie ma w statystykach)
 
@@ -1955,25 +1801,20 @@ if (url.includes('megadron.pl/pl/products')) {
             const v = getComputedStyle(document.documentElement).getPropertyValue('--color-status-' + name).trim();
             return v || null;
           }
+          // ikona pozycji: własna dla dodatkowych, wypełniona etykieta w kolorze statusu dla zamówień
+          function paintIcon(el, code) {
+            const x = extraOf(code);
+            el.textContent = x ? x.icon : 'label';
+            const col = x ? null : colorOf(code);
+            if (col) { el.style.color = col; el.style.fontVariationSettings = "'FILL' 1"; }
+          }
 
           let statuses = load('statuses', null);      // {ts, list:[{code,name,sub,parent}], views:[{id,name}]}
           let selected = load('selected', DEFAULT_SELECTED);
           let enabled = load('enabled', true);          // suwak w nagłówku: false = sekcja zwinięta, nic nie pobiera
           let swDown = false;
           let names = load('names', {});                // własne nazwy pozycji { kod: nazwa } – tylko w tym Tampermonkey
-          // Admin API usunięte (1.2.44): sprzątamy zapisany klucz i dane weryfikacji z Tampermonkey
-          if (load('apiKey', '')) save('apiKey', '');
-          if (load('apiCheck', null)) save('apiCheck', null);
-          // jednorazowo dodaj „Gotowe do odbioru” pod „Gotowe”
-          if (!load('addedPOdb', false) && !selected.includes('p_odb')) {
-            const i = selected.indexOf('p');
-            selected = selected.slice();
-            selected.splice(i >= 0 ? i + 1 : selected.length, 0, 'p_odb');
-            save('selected', selected);
-          }
-          save('addedPOdb', true);
           let counts = load('counts', {});            // {code: n}
-          if (load('view', '')) save('view', ''); // 1.2.45: bez „Widoku do liczenia” – sprzątamy stare ustawienie
           const fresh = {};                            // code -> true (pobrane w tym załadowaniu strony)
           const errors = {};                           // code -> message
           const meta = {};                             // code -> {src:'API'|'panel', ms, note}
@@ -1993,7 +1834,7 @@ if (url.includes('megadron.pl/pl/products')) {
             #tm-statusy .tm-badge.tm-stale{opacity:.5}
             #tm-statusy .tm-badge.tm-err{background:rgba(255,80,80,.35)!important}
             #tm-statusy .tm-empty{font-size:12px;opacity:.6;padding:4px 8px;cursor:pointer}
-            #tm-statusy .--title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+            #tm-statusy .--title{min-width:0;white-space:normal!important;overflow:visible!important;text-overflow:clip!important;overflow-wrap:anywhere}
             #tm-statusy.tm-collapsed .tm-hdr span:first-child,
             #tm-statusy.tm-collapsed .--title,
             #tm-statusy.tm-collapsed .tm-badge{display:none}
@@ -2011,7 +1852,9 @@ if (url.includes('megadron.pl/pl/products')) {
             .tm-ov{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2147483000;display:flex;align-items:center;justify-content:center;font-family:inherit}
             .tm-md{background:#fff;color:#1f1f22;border-radius:10px;width:380px;max-width:calc(100vw - 32px);max-height:calc(100vh - 64px);display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.3);font-size:13px}
             .tm-md-h{display:flex;align-items:center;padding:14px 16px 8px;font-size:15px;font-weight:600}
-            .tm-md-h .tm-x{margin-left:auto;cursor:pointer;font-size:20px;opacity:.6}
+            .tm-md-h .tm-x{cursor:pointer;font-size:20px;opacity:.6}
+            .tm-md-h .tm-bug{margin-left:auto;margin-right:6px;cursor:pointer;font-size:17px;opacity:.35}
+            .tm-md-h .tm-bug.on,.tm-md-h .tm-bug:hover{opacity:.9}
             .tm-md-h .tm-x:hover{opacity:1}
             .tm-md input.tm-search{margin:0 16px 8px;padding:7px 10px;border:1px solid #d6d6db;border-radius:6px;font:inherit}
             .tm-md-list{overflow:auto;padding:0 16px;flex:1;min-height:120px}
@@ -2020,6 +1863,8 @@ if (url.includes('megadron.pl/pl/products')) {
             .tm-md-list .tm-grp:first-child{padding-top:2px}
             .tm-md-list label.tm-sub{padding-left:22px;color:#555}
             .tm-md-list label code{margin-left:auto;font-size:11px;color:#999}
+            .tm-md-list.tm-hide-codes label code{display:none}
+            .tm-md-list .tm-ico{font-size:18px;flex:none}
             .tm-md-list .tm-alias{color:#888}
             .tm-md-list .tm-ren{font-size:16px;opacity:0;cursor:pointer;color:#666;padding:0 2px}
             .tm-md-list label:hover .tm-ren{opacity:.6}
@@ -2027,8 +1872,6 @@ if (url.includes('megadron.pl/pl/products')) {
             .tm-md-list .tm-alias-in{font:inherit;font-size:12px;padding:1px 4px;border:1px solid #bbb;border-radius:3px;width:150px}
             .tm-md-f{border-top:1px solid #eee;padding:10px 16px 14px;display:flex;flex-direction:column;gap:10px}
             .tm-row{display:flex;align-items:center;gap:8px}
-            .tm-row select{margin-left:auto;padding:5px 8px;border:1px solid #d6d6db;border-radius:6px;font:inherit;max-width:200px}
-            .tm-hint{font-size:11px;color:#888}
             .tm-align{margin-left:auto;display:inline-flex;border:1px solid #cfcfd6;border-radius:6px;overflow:hidden}
             .tm-align button{border:0;background:#fff;padding:3px 7px;cursor:pointer;line-height:1;color:#555}
             .tm-align button + button{border-left:1px solid #cfcfd6}
@@ -2072,7 +1915,7 @@ if (url.includes('megadron.pl/pl/products')) {
 
           async function fetchCountPanel(code) {
             const q = CUSTOM[code] ? CUSTOM[code].query : { status: code };
-            let body = 'action=ajax&page=1&' + new URLSearchParams(q).toString();
+            const body = 'action=ajax&page=1&' + new URLSearchParams(q).toString();
             const r = await fetch('/panel/ajax/orders-list-data.php', {
               method: 'POST',
               credentials: 'include',
@@ -2221,10 +2064,17 @@ if (url.includes('megadron.pl/pl/products')) {
 
           // ---------- helpers ----------
           const statusByCode = (c) => (statuses && statuses.list.find((s) => s.code === c)) || null;
-          const baseLabel = (c) => { const x = extraOf(c); if (x) return x.name; if (CUSTOM[c]) return CUSTOM[c].name; const s = statusByCode(c); return s ? s.name : c; };
-          const baseTitle = (c) => { const x = extraOf(c); if (x) return x.name; if (CUSTOM[c]) return CUSTOM[c].name; const s = statusByCode(c); return s ? (s.sub ? `${s.parent} › ${s.name}` : s.name) : c; };
-          const labelOf = (c) => names[c] || baseLabel(c);
-          const titleOf = (c) => names[c] ? `${names[c]} – ${baseTitle(c)}` : baseTitle(c);
+          // full: podstatus z nazwą rodzica
+          const baseName = (c, full) => {
+            const x = extraOf(c);
+            if (x) return x.name;
+            if (CUSTOM[c]) return CUSTOM[c].name;
+            const s = statusByCode(c);
+            if (!s) return c;
+            return full && s.sub ? `${s.parent} › ${s.name}` : s.name;
+          };
+          const labelOf = (c) => names[c] || baseName(c);
+          const titleOf = (c) => names[c] ? `${names[c]} – ${baseName(c, true)}` : baseName(c, true);
 
           // Która pozycja jest aktywna: status zamówień albo pozycja dodatkowa (dopasowanie strony i parametrów).
           function currentCode() {
@@ -2324,18 +2174,12 @@ if (url.includes('megadron.pl/pl/products')) {
               a.dataset.code = code;
               a.draggable = false;
               a.title = titleOf(code);
-              const x = extraOf(code);
               a.innerHTML =
-                `<span class="${cls.icon}">${x ? x.icon : 'label'}</span>` +
+                `<span class="${cls.icon}"></span>` +
                 `<span class="--title mr-auto"></span>` +
                 `<span class="${cls.badge} tm-badge"></span>`;
+              paintIcon(a.firstChild, code);
               a.querySelector('.--title').textContent = labelOf(code);
-              const col = x ? null : colorOf(code);
-              if (col) {
-                const ic = a.querySelector('.--icon');
-                ic.style.color = col;
-                ic.style.fontVariationSettings = "'FILL' 1"; // wypełniona etykieta w kolorze statusu
-              }
               section.appendChild(a);
               wireDrag(a);
             });
@@ -2375,8 +2219,7 @@ if (url.includes('megadron.pl/pl/products')) {
             });
           }
 
-          // ---------- przeciąganie: cały wiersz jedzie za kursorem, pozostałe płynnie robią miejsce ----------
-          // Dopóki ruch < 5 px, to zwykły klik (link do statusu).
+          // ---------- przeciąganie ----------
           let dragCode = null;
           let justDragged = false;
 
@@ -2387,77 +2230,28 @@ if (url.includes('megadron.pl/pl/products')) {
               const i = items.indexOf(a);
               if (items.length < 2 || i < 0) return;
               e.preventDefault();
-              const tops = items.map((x) => x.getBoundingClientRect().top);
-              const step = tops[1] - tops[0];
-              const minDy = tops[0] - tops[i];
-              const maxDy = tops[items.length - 1] - tops[i];
-              const y0 = e.clientY;
-              let dragging = false;
-              let to = i;
-
-              const place = (n) => items.forEach((x, j) => {
-                if (j === i) return;
-                const shift = (i < n && j > i && j <= n) ? -step : (n < i && j >= n && j < i) ? step : 0;
-                x.style.transform = shift ? `translateY(${shift}px)` : '';
-              });
-              const finish = () => {
-                window.removeEventListener('pointermove', onMove, true);
-                window.removeEventListener('pointerup', onUp, true);
-                window.removeEventListener('pointercancel', cancel, true);
-                window.removeEventListener('keydown', onKey, true);
-                section.classList.remove('tm-sorting');
-                dragCode = null;
-              };
-              const cancel = () => {
-                finish();
-                a.classList.remove('tm-lift');
-                items.forEach((x) => { x.style.transform = ''; });
-              };
-              const onKey = (ev) => { if (ev.key === 'Escape' && dragging) { ev.stopPropagation(); cancel(); } };
-              const onMove = (ev) => {
-                const dy = ev.clientY - y0;
-                if (!dragging) {
-                  if (Math.abs(dy) < 5) return;
-                  dragging = true;
+              dragSort(e, items, i, {
+                lift: 'tm-lift', settle: 'tm-settle', sorting: 'tm-sorting', box: section,
+                onStart: () => {
                   dragCode = a.dataset.code;
-                  // tło paska pod uniesionym wierszem, żeby nie prześwitywały sąsiednie
+                  // tło pod uniesionym wierszem, żeby nie prześwitywały sąsiednie
                   for (let x = section; x; x = x.parentElement) {
                     const bg = getComputedStyle(x).backgroundColor;
                     if (bg && bg !== 'transparent' && !/rgba\(.*,\s*0\)$/.test(bg)) { a.style.setProperty('--tm-lift-bg', bg); break; }
                   }
-                  a.classList.add('tm-lift');
-                  section.classList.add('tm-sorting');
-                  window.addEventListener('keydown', onKey, true);
-                }
-                const d = Math.max(minDy, Math.min(maxDy, dy));
-                a.style.transform = `translateY(${d}px)`;
-                const n = Math.max(0, Math.min(items.length - 1, Math.round(i + d / step)));
-                if (n !== to) { to = n; place(to); }
-              };
-              const onUp = (ev) => {
-                if (!dragging && Math.abs(ev.clientY - y0) >= 5) onMove(ev); // szybki ruch bez pośrednich pozycji
-                if (!dragging) { finish(); return; }
-                finish();
-                // puszczenie po przeciągnięciu nie może otworzyć linku
-                justDragged = true;
-                setTimeout(() => { justDragged = false; }, 150);
-                a.classList.remove('tm-lift');
-                a.classList.add('tm-settle');
-                a.style.transform = `translateY(${(to - i) * step}px)`;
-                setTimeout(() => {
+                },
+                onEnd: () => { dragCode = null; },
+                onRelease: () => { justDragged = true; setTimeout(() => { justDragged = false; }, 150); },
+                onDrop: (to) => {
                   if (to !== i) {
                     const list = selected.slice();
-                    const [moved] = list.splice(i, 1);
-                    list.splice(to, 0, moved);
+                    list.splice(to, 0, list.splice(i, 1)[0]);
                     selected = list;
                     save('selected', selected);
                   }
                   render();
-                }, 160);
-              };
-              window.addEventListener('pointermove', onMove, true);
-              window.addEventListener('pointerup', onUp, true);
-              window.addEventListener('pointercancel', cancel, true);
+                },
+              });
             });
             a.addEventListener('dragstart', (e) => e.preventDefault());
           }
@@ -2487,7 +2281,7 @@ if (url.includes('megadron.pl/pl/products')) {
             ov.className = 'tm-ov';
             ov.innerHTML = `
               <div class="tm-md" role="dialog" aria-label="Widoczne statusy">
-                <div class="tm-md-h">Widoczne pozycje<span class="material-symbols-outlined notranslate tm-x" title="Zamknij">close</span></div>
+                <div class="tm-md-h">Widoczne pozycje<span class="material-symbols-outlined notranslate tm-bug" title="Pokaż/ukryj ID statusów">bug_report</span><span class="material-symbols-outlined notranslate tm-x" title="Zamknij">close</span></div>
                 <input type="search" class="tm-search" name="tm-status-filter" autocomplete="off" data-lpignore="true" data-1p-ignore placeholder="Szukaj statusu">
                 <div class="tm-md-list">Ładowanie statusów…</div>
                 <div class="tm-md-f">
@@ -2519,7 +2313,11 @@ if (url.includes('megadron.pl/pl/products')) {
 
             const listEl = ov.querySelector('.tm-md-list');
             const search = ov.querySelector('.tm-search');
-            let checked = new Set(selected);
+            const bug = ov.querySelector('.tm-bug');
+            const showCodes = (on) => { bug.classList.toggle('on', on); listEl.classList.toggle('tm-hide-codes', !on); };
+            showCodes(load('showCodes', false));
+            bug.addEventListener('click', () => { const on = !bug.classList.contains('on'); save('showCodes', on); showCodes(on); });
+            const checked = new Set(selected);
             const draft = { ...names }; // własne nazwy – zapis dopiero po „Zapisz”
             let alignDraft = load('noteAlign', 'left'); // wyrównanie notatek – zapis dopiero po „Zapisz”
             const alignBtns = ov.querySelectorAll('.tm-align button');
@@ -2551,6 +2349,9 @@ if (url.includes('megadron.pl/pl/products')) {
                 cb.type = 'checkbox';
                 cb.checked = checked.has(s.code);
                 cb.addEventListener('change', () => { cb.checked ? checked.add(s.code) : checked.delete(s.code); });
+                const ico = document.createElement('span');
+                ico.className = 'material-symbols-outlined notranslate tm-ico';
+                paintIcon(ico, s.code);
                 const t = document.createElement('span');
                 t.textContent = name;
                 const al = document.createElement('span');
@@ -2590,7 +2391,7 @@ if (url.includes('megadron.pl/pl/products')) {
                 });
                 const c = document.createElement('code');
                 c.textContent = extraOf(s.code) ? '' : s.code;
-                l.append(cb, t, al, ren, c);
+                l.append(cb, ico, t, al, ren, c);
                 listEl.appendChild(l);
               });
               applyFilter();
@@ -2760,7 +2561,6 @@ if (url.includes('megadron.pl/pl/products')) {
           new MutationObserver(() => { tick(); }).observe(document.body, { childList: true, subtree: true });
           setInterval(() => { updateActive(); }, 1500);
           tick();
-        })();
         };
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', tmStatusyStart, { once: true });
@@ -2768,7 +2568,6 @@ if (url.includes('megadron.pl/pl/products')) {
             tmStatusyStart();
         }
     }
-
 
     // ════════════════════════════════════════════════════════════════════════
     // ALLEGRO SALES CENTER – CZAT Z KUPUJĄCYM (guzik w lewym dolnym rogu)
