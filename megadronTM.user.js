@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.3.5
+// @version      1.3.6
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -12,6 +12,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_addStyle
+// @grant        GM_registerMenuCommand
 // @connect      client6220.idosell.com
 // @connect      edge.salescenter.allegro.com
 // @run-at       document-start
@@ -1360,12 +1361,25 @@
     // w statusie "realizowane" -> porównanie -> natywne okno łączenia
     // ════════════════════════════════════════════════════════════════════════
 
+    // klucz API IdoSell (Admin API) – wpisywany przez użytkownika w menu Tampermonkey,
+    // trzymany tylko w GM_setValue, nigdy w kodzie
+    const OO_API_KEY_NAME = 'idosellApiKey';
+    if (window.self === window.top && url.startsWith('https://client6220.idosell.com/') && typeof GM_registerMenuCommand === 'function') {
+        GM_registerMenuCommand('Megadron: ustaw klucz API IdoSell', () => {
+            const has = !!GM_getValue(OO_API_KEY_NAME, '');
+            const v = prompt((has ? 'Klucz API jest ustawiony. Wklej nowy, aby go zmienić, albo zostaw puste, aby usunąć.' : 'Wklej klucz API IdoSell (prawo odczytu zamówień).') + '\n\nKlucz zostaje tylko w Tampermonkey w tej przeglądarce.', '');
+            if (v === null) return;
+            GM_setValue(OO_API_KEY_NAME, v.trim());
+            alert(v.trim() ? 'Zapisano klucz API.' : 'Usunięto klucz API.');
+        });
+    }
+
     if (url.includes('/panel/orders-list.php')) {
 
         GM_addStyle(`
-            .tm-oo-open { display:inline-block; margin-top:6px; padding:3px 10px; border:1px solid #cbd5e1; border-radius:3px; background:#fff; color:#334155; font:600 11px Inter,Arial,sans-serif; cursor:pointer; box-shadow:0 1px 0 rgba(0,0,0,.18); transition:transform .12s ease, box-shadow .12s ease; }
-            .tm-oo-open:hover { transform:translateY(-2px); box-shadow:0 4px 8px rgba(0,0,0,.2); }
-            .tm-oo-open:active { transform:translateY(0); box-shadow:0 1px 0 rgba(0,0,0,.18); }
+            .tm-oo-open { display:inline-block; margin-top:6px; padding:3px 10px; border:1px solid #86efac; border-radius:3px; background:#ecfdf3; color:#166534; font:600 11px Inter,Arial,sans-serif; cursor:pointer; box-shadow:0 1px 0 rgba(0,0,0,.12); transition:transform .12s ease, box-shadow .12s ease, background .12s ease; }
+            .tm-oo-open:hover { transform:translateY(-1px); box-shadow:0 2px 4px rgba(0,0,0,.14); background:#dcfce7; border-color:#4ade80; }
+            .tm-oo-open:active { transform:translateY(0); box-shadow:0 1px 0 rgba(0,0,0,.12); }
             .tm-oo-open .fa { margin-right:5px; }
             .tm-oo-overlay { position:fixed; inset:0; z-index:100000; background:rgba(15,23,42,.5); display:flex; align-items:flex-start; justify-content:center; padding-top:50px; font:13px/1.45 Inter,"Helvetica Neue",Arial,sans-serif; color:#1f2937; }
             .tm-oo-card { background:#fff; border:1px solid #9ca3af; border-radius:0; box-shadow:0 12px 40px rgba(0,0,0,.35); width:min(1150px,95vw); max-height:calc(100vh - 90px); display:flex; flex-direction:column; }
@@ -1708,16 +1722,106 @@
             ooClose();
         }
 
-        // guzik „Połącz zamówienia” pod danymi klienta w kolumnie "Dane bilingowe"
-        function ooAddButtons() {
-            document.querySelectorAll('td.yui-dt0-col-billing_address div[id^="bl"]').forEach(div => {
-                if (div.nextElementSibling && div.nextElementSibling.classList.contains('tm-oo-open')) return;
+        // ---------- które wiersze dostają guzik ----------
+        // z kluczem API: wszystkie zamówienia "realizowane" (on_order) w sklepie -> Map(clientId -> Set(nr zamówienia))
+        let ooApiCache = null; // { at, map }
+        let ooApiPending = null;
+
+        function ooApiPost(body, key) {
+            return new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: location.origin + '/api/admin/v8/orders/orders/search',
+                    headers: { 'X-API-KEY': key, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                    data: JSON.stringify(body),
+                    responseType: 'json',
+                    timeout: 30000,
+                    onload: r => {
+                        if (r.status !== 200) return reject(new Error('HTTP ' + r.status));
+                        try { resolve(typeof r.response === 'object' && r.response ? r.response : JSON.parse(r.responseText)); }
+                        catch (e) { reject(new Error('zła odpowiedź')); }
+                    },
+                    onerror: () => reject(new Error('błąd sieci')),
+                    ontimeout: () => reject(new Error('timeout')),
+                });
+            });
+        }
+
+        async function ooFetchOnOrderMap() {
+            const key = GM_getValue(OO_API_KEY_NAME, '');
+            if (!key) return null;
+            if (ooApiCache && Date.now() - ooApiCache.at < 60000) return ooApiCache.map;
+            if (ooApiPending) return ooApiPending;
+            ooApiPending = (async () => {
+                try {
+                    const map = new Map();
+                    for (let page = 0, pages = 1; page < pages && page < 50; page++) {
+                        const r = await ooApiPost({ params: { ordersStatuses: ['on_order'], resultsPage: page, resultsLimit: 100 } }, key);
+                        (r.Results || []).forEach(o => {
+                            const cid = o.clientResult && o.clientResult.clientAccount && o.clientResult.clientAccount.clientId;
+                            if (cid == null || o.orderSerialNumber == null) return;
+                            if (!map.has(String(cid))) map.set(String(cid), new Set());
+                            map.get(String(cid)).add(String(o.orderSerialNumber));
+                        });
+                        pages = Number(r.resultsNumberPage) || 1;
+                    }
+                    ooApiCache = { at: Date.now(), map };
+                    return map;
+                } catch (e) {
+                    console.warn('[megadron] API:', e.message);
+                    return null;
+                } finally {
+                    ooApiPending = null;
+                }
+            })();
+            return ooApiPending;
+        }
+
+        // bez klucza / przy błędzie API: tylko zamówienia "realizowane" widoczne na wczytanej liście
+        function ooOnOrderMapFromList(rows) {
+            const map = new Map();
+            rows.filter(r => r.client && r.onOrder).forEach(r => {
+                if (!map.has(r.client)) map.set(r.client, new Set());
+                map.get(r.client).add(r.number);
+            });
+            return map;
+        }
+
+        function ooListRows() {
+            return [...document.querySelectorAll('td.yui-dt0-col-billing_address div[id^="bl"]')].map(div => {
+                const tr = div.closest('tr');
+                const link = div.querySelector('a[href*="client_number="]');
+                const idCell = tr && tr.querySelector('td.yui-dt0-col-id');
+                const status = tr && tr.querySelector('td.yui-dt0-col-status');
+                return {
+                    div,
+                    client: link ? (link.getAttribute('href').match(/client_number=(\d+)/) || [])[1] : null,
+                    number: idCell ? (idCell.textContent.match(/\d+/) || [])[0] : null,
+                    onOrder: !!status && /realizowane/i.test(status.textContent),
+                };
+            }).filter(r => r.number);
+        }
+
+        // guzik „Połącz zamówienia” pod danymi klienta – tylko gdy klient ma INNE zamówienie "realizowane"
+        let ooAddRun = 0;
+        async function ooAddButtons() {
+            const run = ++ooAddRun;
+            const rows = ooListRows();
+            if (!rows.length) return;
+            const map = (await ooFetchOnOrderMap()) || ooOnOrderMapFromList(rows);
+            if (run !== ooAddRun) return; // w międzyczasie lista się przerysowała
+            rows.forEach(r => {
+                const set = r.client && map.get(r.client);
+                const show = !!set && [...set].some(n => n !== r.number);
+                const existing = r.div.nextElementSibling && r.div.nextElementSibling.classList.contains('tm-oo-open') ? r.div.nextElementSibling : null;
+                if (!show) { if (existing) existing.remove(); return; }
+                if (existing) return;
                 const btn = document.createElement('button');
                 btn.type = 'button';
                 btn.className = 'tm-oo-open';
-                btn.title = 'Inne zamówienia klienta w realizacji – porównanie i łączenie';
+                btn.title = 'Klient ma inne zamówienia w realizacji – porównanie i łączenie';
                 btn.innerHTML = ooFa('link') + 'Połącz zamówienia';
-                div.after(btn);
+                r.div.after(btn);
             });
         }
 
