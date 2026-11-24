@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.3.7
+// @version      1.3.8
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1301,6 +1301,19 @@
         runAllegroEmpik();
         setTimeout(runAllegroEmpik, 500);
         setTimeout(runAllegroEmpik, 1500);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // KOLORY STATUSÓW W KARCIE ZAMÓWIENIA (kwadracik koloru przy każdej opcji listy)
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (url.includes('/panel/orderd.php')) {
+        // panel daje opcjom border-left w kolorze statusu; Chrome rysuje go w rozwiniętej liście tylko w trybie base-select
+        GM_addStyle(`
+            select:has(option[style*="--color-status-"]), select:has(option[style*="--color-status-"])::picker(select) { appearance: base-select; }
+            select:has(option[style*="--color-status-"]) option { gap: 0; }
+            select:has(option[style*="--color-status-"]) option::checkmark { display: none; }
+        `);
     }
 
     // ════════════════════════════════════════════════════════════════════════
