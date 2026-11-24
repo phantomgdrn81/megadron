@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.3.8
+// @version      1.3.9
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -1314,6 +1314,14 @@
             select:has(option[style*="--color-status-"]) option { gap: 0; }
             select:has(option[style*="--color-status-"]) option::checkmark { display: none; }
         `);
+        // w trybie base-select pole ma szerokość wybranej opcji – ustalamy ją na najdłuższą, żeby nie skakało
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('select:has(option[style*="--color-status-"])').forEach((s) => {
+                const v = s.value;
+                s.style.minWidth = Math.max(...[...s.options].map((o) => { s.value = o.value; return s.offsetWidth; })) + 'px';
+                s.value = v;
+            });
+        });
     }
 
     // ════════════════════════════════════════════════════════════════════════
