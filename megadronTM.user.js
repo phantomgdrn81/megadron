@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Megadron Scripts Packed
 // @namespace    megadron.pl
-// @version      1.3.9
+// @version      1.3.10
 // @description  do repozytorium
 // @author       DF
 // @match        https://client6220.idosell.com/*
@@ -346,6 +346,7 @@
             'Allegro One Box',
             'Allegro One Kurier',
             'Allegro kurier DPD',
+            'Allegro Automat Pocztex',
         ];
 
         function gabarytKafelki(mydiv, onPick) {
